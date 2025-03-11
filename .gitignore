@@ -1,6 +1,5 @@
 /meokten_playlist
 .env
-*.db
 *.html
 /logs
 __pycache__
