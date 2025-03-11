@@ -1,0 +1,8 @@
+/meokten_playlist
+.env
+*.db
+*.html
+/logs
+__pycache__
+.DS_Store
+/.vscode
