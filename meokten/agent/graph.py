@@ -1,695 +1,428 @@
-# agent/graph.py
-import logging
-from typing import Annotated, Any, Dict, List, Literal, Optional, Callable
-import ast
+import json
+import uuid
+from typing import Any, Callable, List, Literal
 
-from dotenv import load_dotenv
-import os
-from langchain_core.messages import (
-    AIMessage,
-    HumanMessage,
-    ToolMessage,
-)
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_openai import ChatOpenAI
-from langgraph.graph.message import AnyMessage, add_messages
-from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
-from typing_extensions import TypedDict
-from langchain_core.runnables import RunnableLambda
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
+from pydantic import ValidationError
 
+from agent.chains import answer_gen, query_check, query_gen
+from agent.config import LLM, State, get_logger
+
+# 내부 모듈 import
 from agent.tools import (
+    create_tool_node_with_fallback,
     db_query_tool,
-    get_table_info_tool,
+    get_schema_tool,
     list_tables_tool,
-    get_menus_by_restaurant_tool,
-    parse_str_to_obj,
 )
 
-load_dotenv()
-
-# 로거 설정
-logger = logging.getLogger(__name__)
-
-
-# 상태 정의
-class State(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-
-
-# 에러 처리 함수
-def handle_tool_error(state) -> dict:
-    """도구 호출 중 에러 처리"""
-    # 에러 정보 확인
-    error = state.get("error")
-
-    # 도구 호출 정보 확인
-    tool_calls = state["messages"][-1].tool_calls
-
-    # ToolMessage로 감싸서 반환
-    return {
-        "messages": [
-            ToolMessage(
-                content=f"에러 발생: {repr(error)}\n\n올바른 도구 호출을 시도하세요.",
-                tool_call_id=tc["id"],
-            )
-            for tc in tool_calls
-        ]
-    }
-
-
-# 에러 처리를 포함한 도구 노드 생성
-def create_tool_node_with_fallback(tools: list):
-    """에러 처리를 포함한 도구 노드 생성"""
-    return ToolNode(tools).with_fallbacks(
-        [RunnableLambda(handle_tool_error)], exception_key="error"
-    )
-
-
-# 첫 번째 도구 호출 노드
-def first_tool_call(state: State) -> dict[str, list[AIMessage]]:
-    """첫 번째 도구 호출: 사용자 질문 처리"""
-    logger.info("첫 번째 도구 호출 노드 실행")
-
-    # 질문 확인
-    messages = state["messages"]
-    question = messages[-1].content if messages else "맛집 추천해줘"
-    logger.info(f"사용자 질문: {question}")
-
-    # 시스템 메시지 추가
-    return {
-        "messages": [
-            AIMessage(
-                content="먼저 데이터베이스의 테이블 목록을 조회하겠습니다. 사용 가능한 테이블을 확인해보겠습니다."
-            )
-        ]
-    }
-
-
-# 쿼리 확인 노드
-def model_check_query(state: State) -> dict[str, list[AIMessage]]:
-    """쿼리 검증 노드: 생성된 SQL 쿼리 검증"""
-    logger.info("쿼리 검증 노드 실행")
-
-    # 메시지 확인
-    messages = state["messages"]
-
-    # 쿼리 체커 프롬프트
-    system_message = """
-    당신은 SQL 쿼리 검증 전문가입니다. 사용자가 제공한 SQL 쿼리를 분석하고 다음 사항을 확인하세요:
-    
-    1. 문법 오류가 있는지 확인
-    2. 테이블 이름이 올바른지 확인 (restaurants, menus만 사용 가능)
-    3. 컬럼 이름이 올바른지 확인
-    4. SQL 인젝션 위험이 있는지 확인
-    
-    오류가 있다면 수정된 쿼리를 제공하세요. 쿼리가 올바르다면 그대로 반환하세요.
-    
-    테이블 정보:
-    - restaurants: id, name, address, latitude, longitude, station_name, video_id, video_url
-    - menus: id, restaurant_id, menu_name, menu_type, price, review
-    
-    예시 검증:
-    - 잘못된 쿼리: "SELECT * FROM users" - 'users' 테이블이 없음
-    - 수정: "SELECT * FROM restaurants"
-    
-    결과는 ```sql 과 ``` 사이에 작성하지 말고, 직접 SQL 쿼리만 반환해주세요.
-    """
-
-    check_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_message),
-            MessagesPlaceholder(variable_name="messages"),
-        ]
-    )
-
-    # 쿼리 체크 모델
-    query_checker = check_prompt | ChatOpenAI(temperature=0)
-
-    # 쿼리 체크 실행
-    response = query_checker.invoke({"messages": messages})
-    logger.info(f"쿼리 검증 결과: {response.content[:100]}...")
-
-    # SQL 쿼리 추출
-    sql_query = response.content
-
-    # 코드 블록 제거
-    if "```sql" in sql_query:
-        sql_query = sql_query.split("```sql")[1].split("```")[0].strip()
-    elif "```" in sql_query:
-        sql_query = sql_query.split("```")[1].strip()
-
-    # 세미콜론 제거
-    if sql_query.endswith(";"):
-        sql_query = sql_query[:-1]
-
-    logger.info(f"추출된 SQL 쿼리: {sql_query}")
-
-    # 검증된 쿼리를 포함한 메시지 반환
-    return {"messages": [AIMessage(content=f"SQL 쿼리: {sql_query}")]}
-
-
-# 쿼리 생성 노드
-def query_gen_node(state: State):
-    """쿼리 생성 노드: 사용자 질문을 SQL 쿼리로 변환"""
-    logger.info("쿼리 생성 노드 실행")
-
-    # 시스템 프롬프트
-    system_prompt = """
-    당신은 SQL 쿼리 생성 전문가입니다. 사용자의 질문을 분석하여 적절한 SQL 쿼리를 생성해주세요.
-    
-    데이터베이스 정보:
-    1. restaurants 테이블:
-       - id: 식당 ID (정수)
-       - name: 식당 이름 (텍스트)
-       - address: 주소 (텍스트)
-       - latitude: 위도 (텍스트)
-       - longitude: 경도 (텍스트)
-       - station_name: 역 이름 (텍스트) LIKE 조건으로 검색
-       - video_id: 유튜브 비디오 ID (텍스트)
-       - video_url: 유튜브 비디오 URL (텍스트)
-    
-    2. menus 테이블:
-       - id: 메뉴 ID (정수)
-       - restaurant_id: 식당 ID (정수) - restaurants 테이블의 id와 연결
-       - menu_name: 메뉴 이름 (텍스트)
-       - menu_type: 메뉴 종류 (텍스트) - 한식, 중식, 일식, 양식 등
-       - price: 가격 (정수)
-       - review: 메뉴 리뷰 (텍스트)
-    
-    쿼리 작성 가이드라인:
-    1. 위치 검색: address 또는 station_name 컬럼에 LIKE 연산자 사용 (예: address LIKE '%강남%')
-    2. 메뉴 종류 검색: menu_type 컬럼 사용 (예: menu_type LIKE '%한식%')
-    3. 식당과 메뉴 조인: restaurants.id = menus.restaurant_id
-    4. 결과는 최대 5개로 제한: LIMIT 5 사용
-    
-    생성한 쿼리는 반드시 ```sql 와 ``` 사이에 작성하세요.
-    
-    예시:
-    - 질문: "강남역 근처 맛집 추천해줘"
-    - 쿼리: 
-    ```sql
-    SELECT * FROM restaurants WHERE address LIKE '%강남역%' OR station_name LIKE '%강남역%' LIMIT 5;
-    ```
-    """
-
-    # 쿼리 생성 프롬프트
-    query_gen_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="messages"),
-        ]
-    )
-
-    # 쿼리 생성 체인
-    query_generator = query_gen_prompt | ChatOpenAI(temperature=0)
-
-    # 쿼리 생성
-    response = query_generator.invoke({"messages": state["messages"]})
-    logger.info(f"쿼리 생성 결과: {response.content[:100]}...")
-
-    return {"messages": state["messages"] + [response]}
-
-
-# 쿼리 실행 노드 추가
-def execute_query_node(state: State):
-    """쿼리 실행 노드: SQL 쿼리 실행"""
-    logger.info("쿼리 실행 노드 실행")
-
-    # 마지막 메시지에서 SQL 쿼리 추출
-    messages = state["messages"]
-    last_message = messages[-1]
-
-    if not isinstance(last_message, AIMessage):
-        logger.warning(f"마지막 메시지가 AI 메시지가 아님: {type(last_message)}")
-        return {
-            "messages": messages + [AIMessage(content="SQL 쿼리를 찾을 수 없습니다.")]
-        }
-
-    content = last_message.content
-
-    # SQL 쿼리 추출
-    sql_query = None
-    if content.startswith("SQL 쿼리:"):
-        sql_query = content.replace("SQL 쿼리:", "").strip()
-    elif "SELECT" in content.upper() and "FROM" in content.upper():
-        sql_query = content
-
-    if not sql_query:
-        logger.warning("SQL 쿼리를 찾을 수 없습니다.")
-        return {
-            "messages": messages + [AIMessage(content="SQL 쿼리를 찾을 수 없습니다.")]
-        }
-
-    logger.info(f"실행할 SQL 쿼리: {sql_query}")
-
-    # 쿼리 실행
-    try:
-        result = db_query_tool(sql_query)
-        logger.info(f"쿼리 실행 결과: {result[:100] if result else '결과 없음'}...")
-
-        # 결과가 없는 경우 처리
-        if not result or result.strip() == "" or result == "쿼리 실행 결과가 없습니다.":
-            logger.warning("쿼리 실행 결과가 없습니다.")
-            return {
-                "messages": messages
-                + [
-                    ToolMessage(
-                        content='{"results": []}', tool_call_id="query_execution"
-                    )
-                ]
-            }
-
-        # 결과를 JSON 형식으로 변환 시도
-        try:
-            # 결과가 표 형식인지 확인
-            if "|" in result and "-" in result:
-                # 표 형식 데이터를 파싱하여 딕셔너리 리스트로 변환
-                lines = result.strip().split("\n")
-                if len(lines) < 3:  # 헤더, 구분선, 데이터 최소 3줄 필요
-                    return {
-                        "messages": messages
-                        + [
-                            ToolMessage(
-                                content='{"results": []}',
-                                tool_call_id="query_execution",
-                            )
-                        ]
-                    }
-
-                # 헤더 추출
-                headers = [h.strip() for h in lines[0].split("|") if h.strip()]
-
-                # 데이터 행 추출 및 변환
-                results_list = []
-                for line in lines[2:]:  # 첫 번째 줄은 헤더, 두 번째 줄은 구분선
-                    if "|" not in line:
-                        continue
-
-                    values = [v.strip() for v in line.split("|") if v.strip() != ""]
-                    if len(values) == len(headers):
-                        row_dict = dict(zip(headers, values))
-                        results_list.append(row_dict)
-
-                # JSON 형식으로 변환
-                import json
-
-                json_result = json.dumps({"results": results_list})
-                logger.info(f"JSON 변환 결과: {json_result[:100]}...")
-
-                return {
-                    "messages": messages
-                    + [ToolMessage(content=json_result, tool_call_id="query_execution")]
-                }
-            else:
-                # 결과가 표 형식이 아닌 경우 파싱 시도
-                try:
-                    # 튜플 리스트 형식인지 확인 [(id, name, address, ...)]
-                    import ast
-
-                    parsed_result = ast.literal_eval(result)
-
-                    # 튜플 리스트를 딕셔너리 리스트로 변환
-                    if isinstance(parsed_result, list) and len(parsed_result) > 0:
-                        # 첫 번째 항목이 튜플인지 확인
-                        if isinstance(parsed_result[0], tuple):
-                            # 컬럼 이름 추정 (restaurants 테이블 기준)
-                            columns = [
-                                "id",
-                                "name",
-                                "address",
-                                "latitude",
-                                "longitude",
-                                "station_name",
-                                "video_id",
-                                "video_url",
-                            ]
-
-                            # 딕셔너리 리스트 생성
-                            dict_list = []
-                            for item in parsed_result:
-                                # 컬럼 수에 맞게 조정
-                                item_dict = {}
-                                for i, value in enumerate(item):
-                                    if i < len(columns):
-                                        item_dict[columns[i]] = value
-                                    else:
-                                        item_dict[f"column_{i}"] = value
-                                dict_list.append(item_dict)
-
-                            # JSON 형식으로 변환
-                            import json
-
-                            json_result = json.dumps({"results": dict_list})
-                            logger.info(
-                                f"튜플 리스트 변환 결과: {json_result[:100]}..."
-                            )
-
-                            return {
-                                "messages": messages
-                                + [
-                                    ToolMessage(
-                                        content=json_result,
-                                        tool_call_id="query_execution",
-                                    )
-                                ]
-                            }
-                except Exception as e:
-                    logger.error(f"튜플 리스트 변환 중 오류 발생: {str(e)}")
-
-                # 그 외의 경우 빈 리스트 반환
-                logger.warning("결과를 파싱할 수 없어 빈 리스트 반환")
-                return {
-                    "messages": messages
-                    + [
-                        ToolMessage(
-                            content='{"results": []}', tool_call_id="query_execution"
-                        )
-                    ]
-                }
-        except Exception as e:
-            logger.error(f"결과 변환 중 오류 발생: {str(e)}")
-            return {
-                "messages": messages
-                + [
-                    ToolMessage(
-                        content='{"results": []}', tool_call_id="query_execution"
-                    )
-                ]
-            }
-    except Exception as e:
-        error_msg = f"쿼리 실행 중 오류 발생: {str(e)}"
-        logger.error(error_msg)
-        return {"messages": messages + [AIMessage(content=error_msg)]}
-
-
-# 결과 처리 노드
-def process_results_node(state: State):
-    """결과 처리 노드: 쿼리 결과에서 메뉴 정보 가져와 통합"""
-    logger.info("결과 처리 노드 실행")
-
-    # 마지막 메시지에서 쿼리 결과 가져오기
-    messages = state["messages"]
-    last_message = messages[-1]
-
-    # 결과를 파이썬 객체로 변환
-    try:
-        # 마지막 메시지가 도구 메시지인지 확인
-        if isinstance(last_message, ToolMessage):
-            content = last_message.content
-            logger.info(f"마지막 메시지 타입: ToolMessage, 내용 길이: {len(content)}")
-
-            # 문자열에서 파이썬 객체로 변환
-            try:
-                # JSON 형식인지 확인
-                import json
-
-                results_obj = json.loads(content)
-
-                if "results" in results_obj:
-                    results = results_obj["results"]
-                    logger.info(
-                        f"JSON 파싱 결과: {type(results)}, 항목 수: {len(results) if isinstance(results, list) else 'not a list'}"
-                    )
-
-                    # 결과가 문자열인 경우 추가 파싱 시도
-                    if isinstance(results, str):
-                        try:
-                            # 문자열을 파이썬 객체로 변환 시도
-                            import ast
-
-                            parsed_results = ast.literal_eval(results)
-                            if isinstance(parsed_results, list):
-                                results = parsed_results
-                                logger.info(
-                                    f"문자열 파싱 결과: {type(results)}, 항목 수: {len(results)}"
-                                )
-                        except Exception as e:
-                            logger.error(f"문자열 파싱 중 오류 발생: {str(e)}")
-                else:
-                    results = []
-                    logger.warning("결과에 'results' 키가 없습니다.")
-            except json.JSONDecodeError:
-                # JSON이 아닌 경우 parse_str_to_obj 시도
-                results = parse_str_to_obj(content)
-                logger.info(f"parse_str_to_obj 결과: {type(results)}")
-
-            # 결과가 없는 경우
-            if (
-                not results
-                or (isinstance(results, list) and len(results) == 0)
-                or results == "쿼리 실행 결과가 없습니다."
-            ):
-                return {
-                    "messages": messages
-                    + [
-                        AIMessage(
-                            content="조건에 맞는 식당을 찾을 수 없습니다. 다른 검색어로 시도해보세요."
-                        )
-                    ]
-                }
-
-            # 결과 처리
-            if isinstance(results, list):
-                restaurants = results
-                logger.info(f"식당 결과 개수: {len(restaurants)}")
-
-                # 메뉴 정보 가져오기
-                for i, restaurant in enumerate(restaurants[:5]):  # 최대 5개만 처리
-                    try:
-                        restaurant_id = restaurant.get("id")
-                        if restaurant_id:
-                            # 메뉴 정보 쿼리
-                            menu_response = get_menus_by_restaurant_tool(
-                                str(restaurant_id)
-                            )
-
-                            try:
-                                # JSON 형식인지 확인
-                                import json
-
-                                menu_obj = json.loads(menu_response)
-                                if "results" in menu_obj:
-                                    menus = menu_obj["results"]
-                                else:
-                                    menus = []
-                            except json.JSONDecodeError:
-                                # JSON이 아닌 경우 parse_str_to_obj 시도
-                                menus = parse_str_to_obj(menu_response)
-
-                            if menus and isinstance(menus, list):
-                                restaurant["menus"] = menus
-                                logger.info(
-                                    f"식당 {restaurant_id}의 메뉴 {len(menus)}개 추가됨"
-                                )
-                    except Exception as e:
-                        logger.error(f"식당 {i}번의 메뉴 정보 처리 중 오류: {str(e)}")
-
-                # 최종 응답 생성
-                final_response = "다음과 같은 맛집을 찾았습니다:\n\n"
-
-                for i, restaurant in enumerate(restaurants, 1):
-                    logger.debug(f"식당 정보: {restaurant}")
-                    final_response += f"{i}. **{restaurant[1]}**\n"
-                    final_response += f"   주소: {restaurant[2]}\n"
-
-                    if restaurant.get("video_url"):
-                        final_response += f"   영상: {restaurant.get('video_url')}\n"
-
-                    # 메뉴 정보 추가
-                    if restaurant.get("menus") and len(restaurant.get("menus")) > 0:
-                        final_response += "   대표 메뉴:\n"
-                        for menu in restaurant.get("menus"):  # 최대 3개 메뉴만 표시
-                            menu_name = menu.get("menu_name", "이름 없음")
-                            menu_price = menu.get("price", "가격 정보 없음")
-                            menu_review = menu.get("review", "")
-
-                            final_response += f"     - {menu_name} ({menu_price}원)"
-                            if menu_review:
-                                final_response += f" - {menu_review}"
-                            final_response += "\n"
-
-                    final_response += "\n"
-
-                return {"messages": messages + [AIMessage(content=final_response)]}
-            else:
-                logger.warning(f"예상치 못한 결과 타입: {type(results)}")
-                return {
-                    "messages": messages
-                    + [
-                        AIMessage(
-                            content=f"쿼리 결과 처리 중 오류가 발생했습니다. 결과 형식이 예상과 다릅니다: {type(results)}"
-                        )
-                    ]
-                }
-        else:
-            logger.warning(f"마지막 메시지가 도구 메시지가 아님: {type(last_message)}")
-            return {
-                "messages": messages
-                + [
-                    AIMessage(
-                        content="쿼리 결과를 처리할 수 없습니다. 다시 시도해주세요."
-                    )
-                ]
-            }
-
-    except Exception as e:
-        # 오류가 발생한 경우 일반 응답 반환
-        error_msg = f"결과 처리 중 오류가 발생했습니다: {str(e)}"
-        logger.error(error_msg)
-        return {"messages": messages + [AIMessage(content=error_msg)]}
-
-
-# 계속 진행 여부 결정 함수
-def should_continue(
-    state: State,
-) -> Literal[END, "correct_query", "query_gen", "process_results", "execute_query"]:
-    """계속 진행 여부 결정 함수: 다음 단계 결정"""
-    logger.info("계속 진행 여부 결정 함수 실행")
-
-    # 마지막 메시지 확인
-    messages = state["messages"]
-    last_message = messages[-1]
-
-    # 마지막 메시지 내용 확인
-    if isinstance(last_message, ToolMessage):
-        # 도구 메시지인 경우 process_results로 이동
-        logger.info("도구 메시지 감지됨 - 결과 처리 단계로 이동")
-        return "process_results"
-
-    if isinstance(last_message, AIMessage):
-        content = last_message.content
-
-        # SQL 쿼리가 포함된 경우 correct_query로 이동
-        if "```sql" in content:
-            logger.info("SQL 쿼리 감지됨 - 쿼리 검증 단계로 이동")
-            return "correct_query"
-
-        # 검증된 SQL 쿼리가 있는 경우 execute_query로 이동
-        if content and "SELECT" in content.upper() and "FROM" in content.upper():
-            logger.info("검증된 SQL 쿼리 감지됨 - 쿼리 실행 단계로 이동")
-            return "execute_query"
-
-    # 기본적으로 query_gen으로 이동
-    logger.info("기본 흐름 - 쿼리 생성 단계로 이동")
-    return "query_gen"
+# 로깅 설정 - graph.log 파일에 로그를 남김
+logger = get_logger()
 
 
 # 그래프 생성 함수
-def create_agent_graph():
-    """에이전트 그래프 생성"""
-    logger.info("에이전트 그래프 생성")
+class AgentGraph:
+    def __init__(self):
+        """SQL 에이전트 그래프를 생성합니다."""
+        # 새 그래프 생성
+        workflow = StateGraph(State)
+        # 노드 추가
+        workflow.add_node("first_tool_call", self.first_tool_call)
+        workflow.add_node(
+            "list_tables_tool", create_tool_node_with_fallback([list_tables_tool])
+        )
 
-    # 워크플로우 정의
-    workflow = StateGraph(State)
+        # 관련 테이블 선택을 위한 모델 노드 추가
+        self.model_get_schema = LLM().bind_tools([get_schema_tool])
+        workflow.add_node(
+            "model_get_schema",
+            lambda state: {
+                "messages": [self.model_get_schema.invoke(state["messages"])],
+            },
+        )
 
-    # 노드 추가
-    workflow.add_node("first_tool_call", first_tool_call)
-    workflow.add_node(
-        "list_tables_tool", create_tool_node_with_fallback([list_tables_tool])
-    )
-    workflow.add_node(
-        "get_schema_tool", create_tool_node_with_fallback([get_table_info_tool])
-    )
-    workflow.add_node("query_gen", query_gen_node)
-    workflow.add_node("correct_query", model_check_query)
-    workflow.add_node("execute_query", execute_query_node)
-    workflow.add_node("process_results", process_results_node)
+        workflow.add_node(
+            "get_schema_tool", create_tool_node_with_fallback([get_schema_tool])
+        )
+        workflow.add_node("query_gen", self.query_gen_node)
+        workflow.add_node("correct_query", self.model_check_query)
+        workflow.add_node(
+            "execute_query", create_tool_node_with_fallback([db_query_tool])
+        )
+        workflow.add_node("process_query_result", self.process_query_result)
+        workflow.add_node("generate_answer", self.generate_answer_node)
+        # 엣지 연결
+        workflow.add_edge(START, "first_tool_call")
+        workflow.add_edge("first_tool_call", "list_tables_tool")
+        workflow.add_edge("list_tables_tool", "model_get_schema")
+        workflow.add_edge("model_get_schema", "get_schema_tool")
+        workflow.add_edge("get_schema_tool", "query_gen")
+        workflow.add_conditional_edges("query_gen", self.should_continue)
+        workflow.add_edge("correct_query", "execute_query")
+        workflow.add_edge("execute_query", "process_query_result")
+        workflow.add_edge("process_query_result", "query_gen")
+        workflow.add_edge("generate_answer", END)
 
-    # 엣지 추가
-    workflow.add_edge("first_tool_call", "list_tables_tool")
-    workflow.add_edge("list_tables_tool", "get_schema_tool")
-    workflow.add_edge("get_schema_tool", "query_gen")
+        # 그래프 컴파일
+        self.app = workflow.compile(checkpointer=MemorySaver())
 
-    # 조건부 엣지 추가
-    workflow.add_conditional_edges(
-        "query_gen",
-        should_continue,
-        {
-            "correct_query": "correct_query",
-            "query_gen": "query_gen",
-            "process_results": "process_results",
-            "execute_query": "execute_query",
-        },
-    )
-
-    # correct_query 노드에서 execute_query 노드로 이동하는 조건부 엣지 추가
-    workflow.add_conditional_edges(
-        "correct_query",
-        lambda state: "execute_query",
-        {
-            "execute_query": "execute_query",
-        },
-    )
-
-    workflow.add_edge("execute_query", "process_results")
-    workflow.add_edge("process_results", END)
-
-    # 시작 노드 설정
-    workflow.set_entry_point("first_tool_call")
-
-    # 체크포인터 없이 그래프 컴파일
-    return workflow.compile()
-
-
-# 에이전트 실행 함수
-def run_agent(question: str, graph=None) -> Dict[str, Any]:
-    """에이전트 실행 함수"""
-    logger.info(f"에이전트 실행 시작: {question}")
-
-    try:
-        # 그래프 생성 또는 재사용
-        if graph is None:
-            logger.info("새 그래프 생성")
-            graph = create_agent_graph()
-        else:
-            logger.info("기존 그래프 사용")
-
-        # 초기 상태 설정
-        config = {"recursion_limit": 15}
-        state = {"messages": [HumanMessage(content=question)]}
-
-        # 결과 저장 변수
-        final_result = {
-            "response": "응답을 생성할 수 없습니다.",
-            "messages": [HumanMessage(content=question)],
+    # 첫 번째 도구 호출을 위한 노드 정의
+    def first_tool_call(self, state: State) -> dict[str, list[AIMessage]]:
+        return {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "sql_db_list_tables",
+                            "args": {},
+                            "id": "initial_tool_call_abc123",
+                        }
+                    ],
+                )
+            ]
         }
 
+    # 쿼리 정확성 체크 함수
+    def model_check_query(self, state: State) -> dict[str, list[AIMessage]]:
+        """쿼리 정확성을 체크하는 함수"""
+        return {"messages": [query_check.invoke({"messages": [state["messages"][-1]]})]}
+
+    # 쿼리 생성 노드 정의
+    def query_gen_node(self, state: State):
         try:
-            # 그래프 실행 - 단순화된 호출
-            result = graph.invoke(state, config=config)
+            # 이전 메시지에 이미 쿼리 결과가 있는지 확인
+            for message in reversed(state["messages"][:-1]):  # 마지막 메시지 제외
+                if (
+                    hasattr(message, "name")
+                    and message.name == "db_query_tool"
+                    and hasattr(message, "content")
+                    and not message.content.startswith("Error:")
+                ):
+                    # 쿼리 결과가 있으면 QUERY_EXECUTED_SUCCESSFULLY 반환
+                    return {
+                        "messages": [AIMessage(content="QUERY_EXECUTED_SUCCESSFULLY")]
+                    }
 
-            # 결과 처리
-            if "messages" in result:
-                messages = result["messages"]
+            # 쿼리 생성
+            message = query_gen.invoke(state)
 
-                # 마지막 메시지에서 응답 추출
-                if messages and len(messages) > 0:
-                    last_message = messages[-1]
-                    if hasattr(last_message, "content"):
-                        final_result["response"] = last_message.content
-                    else:
-                        logger.warning(
-                            f"마지막 메시지에 content 속성이 없습니다: {type(last_message)}"
-                        )
-                        final_result["response"] = str(last_message)
+            # 이미 답변 형식이면 그대로 반환
+            if (
+                hasattr(message, "content")
+                and isinstance(message.content, str)
+                and len(message.content) > 50  # 긴 텍스트는 답변으로 간주
+                and not message.content.startswith("SELECT")
+                and not message.content.startswith("Error:")
+            ):
+                # 답변이 "Answer:"로 시작하지 않으면 추가
+                if not message.content.startswith("Answer:"):
+                    message.content = f"Answer: {message.content}"
+                return {"messages": [message]}
 
-                final_result["messages"] = messages
-
-            return final_result
+            # 일반적인 쿼리 또는 오류 메시지
+            return {"messages": [message]}
 
         except Exception as e:
-            # 그래프 실행 중 예외 발생
-            error_msg = f"그래프 실행 중 오류 발생: {str(e)}"
-            logger.error(error_msg)
-            final_result["response"] = error_msg
-            return final_result
+            logger.error(f"쿼리 생성 중 오류: {str(e)}")
+            return {
+                "messages": [
+                    AIMessage(
+                        content=f"Error: 쿼리 생성 중 오류가 발생했습니다: {str(e)}"
+                    )
+                ]
+            }
 
-    except Exception as e:
-        # 전체 실행 중 예외 발생
-        error_msg = f"에이전트 실행 중 오류 발생: {str(e)}"
-        logger.error(error_msg)
-        return {
-            "response": error_msg,
-            "messages": [HumanMessage(content=question)],
-        }
+    # 쿼리 실행 결과를 처리하는 노드
+    def process_query_result(self, state: State):
+        last_message = state["messages"][-1]
+
+        # 쿼리 실행 결과가 있으면 성공 신호 반환
+        if (
+            hasattr(last_message, "name")
+            and last_message.name == "db_query_tool"
+            and hasattr(last_message, "content")
+            and not last_message.content.startswith("Error:")
+        ):
+            return {"messages": [AIMessage(content="QUERY_EXECUTED_SUCCESSFULLY")]}
+
+        # 결과가 없거나 오류인 경우 그대로 반환
+        return {"messages": [last_message]}
+
+    # 답변 생성 노드 정의
+    def generate_answer_node(self, state: State):
+        try:
+            # 쿼리 결과 찾기
+            query_result = None
+            for message in reversed(state["messages"]):
+                if (
+                    hasattr(message, "name")
+                    and message.name == "db_query_tool"
+                    and hasattr(message, "content")
+                    and not message.content.startswith("Error:")
+                ):
+                    query_result = message.content
+                    break
+
+            if not query_result:
+                return {
+                    "messages": [
+                        AIMessage(
+                            content="Answer: 죄송합니다, 쿼리 결과를 찾을 수 없습니다."
+                        )
+                    ]
+                }
+
+            # 사용자 질문 찾기
+            user_question = None
+            for message in state["messages"]:
+                if hasattr(message, "type") and message.type == "human":
+                    user_question = message.content
+                    break
+
+            # 답변 생성을 위한 컨텍스트 구성
+            try:
+                # 답변 생성 시도
+                answer_context = {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"질문: {user_question}\n\n쿼리 결과: {query_result}",
+                        }
+                    ]
+                }
+
+                # 직접 LLM 호출 후 결과 처리
+                llm_response = answer_gen.invoke(
+                    {"messages": answer_context["messages"]}
+                )
+                content = f"Answer: {llm_response}"
+            except Exception as e:
+                # LLM 호출 실패 시 기본 응답
+                content = f"Answer: 죄송합니다, 쿼리 결과를 해석하는 중 오류가 발생했습니다: {str(e)}"
+
+            return {"messages": [AIMessage(content=content)]}
+
+        except Exception as e:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=f"Answer: 죄송합니다, 답변 생성 중 오류가 발생했습니다: {str(e)}"
+                    )
+                ]
+            }
+
+    # 조건부 엣지 정의
+    def should_continue(
+        self,
+        state: State,
+    ) -> Literal[END, "correct_query", "query_gen", "generate_answer"]:
+        last_message = state["messages"][-1]
+
+        # 메시지 내용이 있는 경우
+        if hasattr(last_message, "content") and isinstance(last_message.content, str):
+            # 1) Terminate if the message starts with "Answer:"
+            if last_message.content.startswith("Answer:"):
+                return END
+            # 2) 쿼리가 성공적으로 실행되었으면 답변 생성 노드로 이동
+            elif last_message.content == "QUERY_EXECUTED_SUCCESSFULLY":
+                return "generate_answer"
+            # 3) 오류가 있으면 쿼리 생성 노드로 돌아감
+            elif last_message.content.startswith("Error:"):
+                return "query_gen"
+            # 4) 일반 텍스트 응답이 있으면 (영어로 된 답변 등) 종료
+            elif len(last_message.content) > 20 and not last_message.content.startswith(
+                "SELECT"
+            ):
+                return END
+
+        # 5) 반복 횟수 제한을 위한 안전장치
+        if len(state["messages"]) > 20:
+            return END
+
+        # 기본적으로 쿼리 검증 노드로 이동
+        return "correct_query"
+
+    def random_uuid(self):
+        """랜덤 UUID를 생성합니다."""
+        return str(uuid.uuid4())
+
+    def invoke_graph(
+        self,
+        graph: Any,
+        inputs: dict,
+        config: RunnableConfig = None,
+        node_names: List[str] = [],
+        callback: Callable = None,
+        return_result: bool = True,
+    ):
+        """
+        LangGraph 앱의 실행 결과를 예쁘게 스트리밍하여 출력하는 함수입니다.
+
+        Args:
+            graph: 실행할 컴파일된 LangGraph 객체
+            inputs (dict): 그래프에 전달할 입력값 딕셔너리
+            config (RunnableConfig, optional): 실행 설정
+            node_names (List[str], optional): 출력할 노드 이름 목록. 기본값은 빈 리스트
+            callback (Callable, optional): 각 청크 처리를 위한 콜백 함수. 기본값은 None
+                콜백 함수는 {"node": str, "content": str} 형태의 딕셔너리를 인자로 받습니다.
+            return_result (bool, optional): 결과를 반환할지 여부. 기본값은 True
+
+        Returns:
+            dict or None: return_result가 True인 경우 최종 결과를 반환, 아니면 None 반환
+        """
+        if config is None:
+            config = RunnableConfig(
+                recursion_limit=30, configurable={"thread_id": self.random_uuid()}
+            )
+
+        def format_namespace(namespace):
+            return namespace[-1].split(":")[0] if len(namespace) > 0 else "root graph"
+
+        # 결과를 저장할 변수
+        result = {}
+
+        # subgraphs=True 를 통해 서브그래프의 출력도 포함
+        for namespace, chunk in graph.stream(
+            inputs, config, stream_mode="updates", subgraphs=True
+        ):
+            for node_name, node_chunk in chunk.items():
+                # node_names가 비어있지 않은 경우에만 필터링
+                if len(node_names) > 0 and node_name not in node_names:
+                    continue
+
+                # 결과 저장 (return_result가 True인 경우)
+                if return_result:
+                    if node_name not in result:
+                        result[node_name] = []
+                    result[node_name].append(node_chunk)
+
+                # 콜백 함수가 있는 경우 실행
+                if callback is not None:
+                    callback({"node": node_name, "content": node_chunk})
+                # 콜백이 없는 경우 기본 출력
+                else:
+                    logger.debug("\n" + "=" * 50)
+                    formatted_namespace = format_namespace(namespace)
+                    if formatted_namespace == "root graph":
+                        logger.debug(f"🔄 Node: {node_name} 🔄")
+                    else:
+                        logger.debug(
+                            f"🔄 Node: {node_name} in [{formatted_namespace}] 🔄"
+                        )
+                    logger.debug("- " * 25)
+
+                    # 노드의 청크 데이터 출력
+                    if isinstance(node_chunk, dict):
+                        for k, v in node_chunk.items():
+                            if isinstance(v, BaseMessage):
+                                logger.debug(f"{v}")
+                            elif isinstance(v, list):
+                                for list_item in v:
+                                    if isinstance(list_item, BaseMessage):
+                                        logger.debug(f"{list_item}")
+                                    else:
+                                        logger.debug(f"{list_item}")
+                            elif isinstance(v, dict):
+                                for (
+                                    node_chunk_key,
+                                    node_chunk_value,
+                                ) in node_chunk.items():
+                                    logger.debug(
+                                        f"{node_chunk_key}:\n{node_chunk_value}"
+                                    )
+                            else:
+                                logger.debug(f"{k}:\n{v}")
+                    else:
+                        if node_chunk is not None:
+                            for item in node_chunk:
+                                logger.debug(f"{item}")
+                    logger.debug("=" * 50)
+
+        # 최종 결과 반환 (return_result가 True인 경우)
+        if return_result:
+            # 그래프의 최종 결과 가져오기
+            full_result = graph.invoke(inputs, config)
+
+            # 최종 결과에서 "Answer:"로 시작하는 마지막 메시지 또는 SubmitFinalAnswer 도구 호출 결과 추출
+            final_result = {"messages": []}
+            if "messages" in full_result:
+                # 1. "Answer:"로 시작하는 메시지 찾기
+                for message in reversed(full_result["messages"]):
+                    if (
+                        hasattr(message, "content")
+                        and isinstance(message.content, str)
+                        and message.content.startswith("Answer:")
+                    ):
+                        final_result["messages"] = [message]
+                        break
+
+                # 2. 최종 답변이 없는 경우 SubmitFinalAnswer 도구 호출 결과 찾기
+                if not final_result["messages"]:
+                    for message in reversed(full_result["messages"]):
+                        if hasattr(message, "tool_calls") and message.tool_calls:
+                            for tc in message.tool_calls:
+                                if tc.get("name") == "SubmitFinalAnswer":
+                                    # 다음 메시지가 최종 답변일 가능성이 높음
+                                    idx = full_result["messages"].index(message)
+                                    if idx + 1 < len(full_result["messages"]):
+                                        final_result["messages"] = [
+                                            full_result["messages"][idx + 1]
+                                        ]
+                                        break
+                            if final_result["messages"]:
+                                break
+
+                # 3. 여전히 최종 답변이 없는 경우 원래 결과 사용
+                if not final_result["messages"]:
+                    final_result = full_result
+            else:
+                final_result = full_result
+
+            return {"streaming_results": result, "final_result": final_result}
+
+        return None
+
+    def run_agent(
+        self,
+        query: str,
+    ):
+        """
+        사용자 질의를 받아 에이전트를 실행하고 결과를 반환합니다.
+
+        Args:
+            query (str): 사용자 질의
+            agent_graph: 에이전트 그래프 인스턴스 (없으면 새로 생성)
+
+        Returns:
+            dict: 에이전트 실행 결과
+        """
+        try:
+
+            # 에이전트 실행
+            logger.info(f"에이전트 실행: {query}")
+            result = self.invoke_graph(
+                graph=self.app,
+                inputs={"messages": [HumanMessage(content=query)]},
+                config=RunnableConfig(
+                    recursion_limit=30, configurable={"thread_id": self.random_uuid()}
+                ),
+                return_result=True,
+            )
+
+            # 결과 처리
+            if (
+                result
+                and "final_result" in result
+                and "messages" in result["final_result"]
+            ):
+                messages = result["final_result"]["messages"][0].content
+                logger.info(f"에이전트 실행 결과: {messages}")
+                return messages
+
+        except Exception as e:
+            logger.error(f"에이전트 실행 중 오류: {str(e)}")
+            return {"error": str(e)}

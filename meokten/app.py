@@ -1,21 +1,28 @@
 # app.py
-import streamlit as st
-from agent.graph import run_agent, create_agent_graph
-from utils.map_utils import display_map_in_streamlit, create_restaurant_map
-from streamlit_folium import folium_static
-import os
-from dotenv import load_dotenv
-import logging
 import argparse
+import ast
+import json
+import os
 from typing import Any, Dict, List
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+import streamlit as st
+from dotenv import load_dotenv
+from streamlit_folium import folium_static
+
+from agent.config import get_logger
+
+# 커스텀 모듈 임포트
+from agent.graph import AgentGraph
+from utils.map_utils import create_restaurant_map
+
+
+@st.cache_resource
+def create_agent_graph():
+    return AgentGraph()
+
+
+# 로깅 설정 - app.log 파일에 로그 기록
+logger = get_logger()
 
 # 현재 작업 디렉토리 및 파일 확인
 current_dir = os.getcwd()
@@ -132,11 +139,153 @@ if "messages" not in st.session_state:
     st.session_state.highlighted_restaurant = None  # 하이라이트할 식당 ID
 
 
+# 식당 JSON 파싱 함수
+def parse_restaurant_info(response_text):
+    """응답 텍스트에서 식당 정보를 추출합니다."""
+    try:
+        logger.info(f"파싱할 응답 텍스트: {response_text[:50]}...")
+
+        # "Answer:" 텍스트 제거
+        if response_text.startswith("Answer:"):
+            response_text = response_text.replace("Answer: ", "").strip()
+
+        # JSON 문자열을 파이썬 객체로 변환
+        try:
+            if "answer" in response_text:
+                data = ast.literal_eval(response_text)
+                # 식당 정보 추출
+                Answer = data.get("answer", "")
+                restaurants = []
+                if isinstance(data, dict) and "infos" in data:
+                    logger.info(f"응답에서 {len(data['infos'])}개의 식당 정보 발견")
+
+                    # 서울 중심 좌표 (기본값)
+                    base_lat, base_lng = 37.5665, 126.9780
+
+                    for i, info in enumerate(data["infos"], 1):
+                        # 좌표 정보 처리
+                        try:
+                            lat = info.get("lat", "0")
+                            lng = info.get("lng", "0")
+
+                            # 문자열인 경우 변환 처리
+                            if isinstance(lat, str):
+                                lat = float(lat) if lat and lat != "정보 없음" else 0
+                            if isinstance(lng, str):
+                                lng = float(lng) if lng and lng != "정보 없음" else 0
+
+                            # 좌표가 없거나 0인 경우 기본 좌표에 오프셋 추가
+                            if not lat or not lng or lat == 0 or lng == 0:
+                                lat = base_lat + (i * 0.001)
+                                lng = base_lng + (i * 0.001)
+                                logger.info(
+                                    f"식당 {i}에 기본 좌표 할당: lat={lat}, lng={lng}"
+                                )
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"좌표 변환 오류, 기본값 사용: {str(e)}")
+                            lat = base_lat + (i * 0.001)
+                            lng = base_lng + (i * 0.001)
+
+                        logger.info(
+                            f"식당 {i}: {info.get('name', '이름 없음')} - 좌표: lat={lat}, lng={lng}"
+                        )
+
+                        Answer += f"\n\n{i}. {info.get('name', '이름 없음')}\n\n"
+                        Answer += f"\t📍 주소: {info.get('address', '주소 없음')}\n\n"
+                        Answer += f"\t🚇 지하철: {info.get('subway', '정보 없음')}\n\n"
+                        Answer += f"\t🍽️ 메뉴: {info.get('menu', '정보 없음')}\n\n"
+                        Answer += f"\t⭐ 리뷰: {info.get('review', '정보 없음')}\n\n"
+                        restaurant = {
+                            "id": i,
+                            "name": info.get("name", "이름 없음"),
+                            "address": info.get("address", "주소 없음"),
+                            "subway": info.get("subway", "정보 없음"),
+                            "menu": info.get("menu", "정보 없음"),
+                            "review": info.get("review", "정보 없음"),
+                            "lat": lat,
+                            "lng": lng,
+                        }
+                        restaurants.append(restaurant)
+                elif isinstance(data, list):
+                    # 직접 식당 목록이 전달된 경우 (예: [{...}, {...}])
+                    logger.info(f"응답에서 {len(data)}개의 식당 정보 발견")
+
+                    # 서울 중심 좌표 (기본값)
+                    base_lat, base_lng = 37.5665, 126.9780
+
+                    for i, info in enumerate(data, 1):
+                        # 좌표 정보 처리
+                        try:
+                            lat = info.get("lat", "0")
+                            lng = info.get("lng", "0")
+
+                            # 문자열인 경우 변환 처리
+                            if isinstance(lat, str):
+                                lat = float(lat) if lat and lat != "정보 없음" else 0
+                            if isinstance(lng, str):
+                                lng = float(lng) if lng and lng != "정보 없음" else 0
+
+                            # 좌표가 없거나 0인 경우 기본 좌표에 오프셋 추가
+                            if not lat or not lng or lat == 0 or lng == 0:
+                                lat = base_lat + (i * 0.001)
+                                lng = base_lng + (i * 0.001)
+                                logger.info(
+                                    f"식당 {i}에 기본 좌표 할당: lat={lat}, lng={lng}"
+                                )
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"좌표 변환 오류, 기본값 사용: {str(e)}")
+                            lat = base_lat + (i * 0.001)
+                            lng = base_lng + (i * 0.001)
+
+                        logger.info(
+                            f"식당 {i}: {info.get('name', '이름 없음')} - 좌표: lat={lat}, lng={lng}"
+                        )
+
+                        Answer += f"\n\n{i}. {info.get('name', '이름 없음')}\n\n"
+                        Answer += f"\t📍 주소: {info.get('address', '주소 없음')}\n\n"
+                        Answer += f"\t🚇 지하철: {info.get('subway', '정보 없음')}\n\n"
+                        Answer += f"\t🍽️ 메뉴: {info.get('menu', '정보 없음')}\n\n"
+                        Answer += f"\t⭐ 리뷰: {info.get('review', '정보 없음')}\n"
+                        restaurant = {
+                            "id": i,
+                            "name": info.get("name", "이름 없음"),
+                            "address": info.get("address", "주소 없음"),
+                            "subway": info.get("subway", "정보 없음"),
+                            "menu": info.get("menu", "정보 없음"),
+                            "review": info.get("review", "정보 없음"),
+                            "lat": lat,
+                            "lng": lng,
+                        }
+                        restaurants.append(restaurant)
+
+                # 추출된 식당 정보 요약 로깅
+                logger.info(f"총 {len(restaurants)}개 식당 정보 추출 완료")
+                for i, r in enumerate(restaurants, 1):
+                    logger.info(
+                        f"추출된 식당 {i}: {r.get('name')} - 좌표: lat={r.get('lat')}, lng={r.get('lng')}"
+                    )
+
+                return Answer, restaurants
+            else:
+                return response_text, []
+
+        except (json.JSONDecodeError, SyntaxError, ValueError) as e:
+            logger.error(f"JSON 파싱 오류: {str(e)}")
+            logger.debug(f"파싱 실패한 문자열: {response_text}")
+            return response_text, []
+
+    except Exception as e:
+        logger.error(f"식당 정보 파싱 오류: {str(e)}")
+        return response_text, []
+
+
 # 식당 하이라이트 함수
 def highlight_restaurant(restaurant_id):
     """식당을 하이라이트하는 함수"""
-    st.session_state.highlighted_restaurant = restaurant_id
-    st.rerun()
+    logger.info(f"식당 하이라이트 요청: ID={restaurant_id}")
+    st.session_state.highlighted_restaurant = int(restaurant_id)
+    # URL 파라미터 설정을 위한 쿼리 파라미터 업데이트
+    st.query_params["restaurant_id"] = restaurant_id
 
 
 # 좌우 컬럼 생성
@@ -148,83 +297,128 @@ with left_col:
 
     # 지도 표시 (식당 정보가 있는 경우)
     if "restaurants" in st.session_state and st.session_state.restaurants:
-        # 디버깅 정보는 별도 체크박스로 분리
-        if st.checkbox("지도 디버깅 정보", value=False):
-            st.write("### 좌표 정보")
-            for i, r in enumerate(st.session_state.restaurants):
-                st.write(
-                    f"{i+1}. {r.get('name')}: 위도={r.get('latitude')}, 경도={r.get('longitude')}"
-                )
-
         # 유효한 좌표가 있는 식당 필터링
         valid_restaurants = []
         for restaurant in st.session_state.restaurants:
             try:
-                lat = restaurant.get("latitude")
-                lng = restaurant.get("longitude")
+                lat = restaurant.get("lat")
+                lng = restaurant.get("lng")
 
-                # 문자열인 경우 변환 시도
-                if isinstance(lat, str) and lat not in ["정보 없음", "0", ""]:
-                    lat = float(lat)
-                if isinstance(lng, str) and lng not in ["정보 없음", "0", ""]:
-                    lng = float(lng)
+                # 숫자형으로 변환 확인
+                if isinstance(lat, (str, float, int)) and lat not in [
+                    "정보 없음",
+                    "0",
+                    "",
+                    0,
+                ]:
+                    if isinstance(lat, str):
+                        lat = float(lat)
+                if isinstance(lng, (str, float, int)) and lng not in [
+                    "정보 없음",
+                    "0",
+                    "",
+                    0,
+                ]:
+                    if isinstance(lng, str):
+                        lng = float(lng)
 
-                # 유효한 좌표인 경우만 추가
+                # 유효한 좌표인 경우만 추가 (엄격하게 검사)
                 if lat and lng and lat != 0 and lng != 0:
-                    valid_restaurants.append(restaurant)
+                    # 좌표 정보 업데이트
+                    restaurant_with_coords = restaurant.copy()
+                    restaurant_with_coords["lat"] = lat
+                    restaurant_with_coords["lng"] = lng
+                    valid_restaurants.append(restaurant_with_coords)
+                    logger.info(
+                        f"유효한 좌표: {restaurant.get('name')} - lat={lat}, lng={lng}"
+                    )
+                else:
+                    logger.warning(
+                        f"유효하지 않은 좌표: {restaurant.get('name', '이름 없음')} - lat={lat}, lng={lng}"
+                    )
+                    # 기본 좌표 할당
+                    base_lat, base_lng = 37.5665, 126.9780
+                    idx = restaurant.get("id", 1)
+                    lat = base_lat + (idx * 0.001)
+                    lng = base_lng + (idx * 0.001)
+                    restaurant_with_coords = restaurant.copy()
+                    restaurant_with_coords["lat"] = lat
+                    restaurant_with_coords["lng"] = lng
+                    valid_restaurants.append(restaurant_with_coords)
+                    logger.info(
+                        f"기본 좌표 할당: {restaurant.get('name')} - lat={lat}, lng={lng}"
+                    )
             except (ValueError, TypeError) as e:
                 logger.warning(
                     f"좌표 변환 오류: {str(e)}, 식당: {restaurant.get('name', '이름 없음')}"
                 )
-                continue
+                # 오류 발생 시 기본 좌표 할당
+                base_lat, base_lng = 37.5665, 126.9780
+                idx = restaurant.get("id", 1)
+                restaurant_with_coords = restaurant.copy()
+                restaurant_with_coords["lat"] = base_lat + (idx * 0.001)
+                restaurant_with_coords["lng"] = base_lng + (idx * 0.001)
+                valid_restaurants.append(restaurant_with_coords)
+                logger.info(
+                    f"오류 후 기본 좌표 할당: {restaurant.get('name')} - lat={base_lat + (idx * 0.001)}, lng={base_lng + (idx * 0.001)}"
+                )
 
-        # 유효한 식당이 있는 경우 지도 생성
-        if valid_restaurants:
+        # 식당이 있는 경우 항상 지도 생성 (유효한 좌표가 없어도 기본 좌표로 표시)
+        if st.session_state.restaurants:
             # 하이라이트된 식당 ID 가져오기
             highlighted_id = st.session_state.get("highlighted_restaurant")
+            logger.info(f"하이라이트된 식당 ID: {highlighted_id}")
 
             # 중심 좌표 계산
             center = None
             if highlighted_id:
                 for r in valid_restaurants:
-                    if str(r.get("id", "")) == str(highlighted_id):
+                    if r.get("id") == highlighted_id:
                         try:
                             center = [
-                                float(r.get("latitude")),
-                                float(r.get("longitude")),
+                                float(r.get("lat")),
+                                float(r.get("lng")),
                             ]
+                            logger.info(f"하이라이트된 식당 중심 좌표: {center}")
                             break
                         except (ValueError, TypeError):
                             pass
 
             if not center and valid_restaurants:
                 try:
-                    center_lat = float(valid_restaurants[0].get("latitude", 37.5665))
-                    center_lng = float(valid_restaurants[0].get("longitude", 126.9780))
+                    center_lat = float(valid_restaurants[0].get("lat", 37.5665))
+                    center_lng = float(valid_restaurants[0].get("lng", 126.9780))
                     center = [center_lat, center_lng]
+                    logger.info(f"첫 번째 식당 중심 좌표: {center}")
                 except (ValueError, TypeError):
                     center = [37.5665, 126.9780]  # 기본값: 서울
+                    logger.info(f"기본 중심 좌표 사용: {center}")
             else:
-                center = [37.5665, 126.9780]  # 기본값: 서울
+                # center가 설정되지 않았을 경우 기본값 설정
+                if not center:
+                    center = [37.5665, 126.9780]  # 기본값: 서울
+                    logger.info(f"기본 중심 좌표 사용: {center}")
 
             # 지도 생성 및 표시
             st.info(f"총 {len(valid_restaurants)}개의 식당을 지도에 표시합니다.")
+            logger.info(f"지도에 표시할 식당 수: {len(valid_restaurants)}")
             m = create_restaurant_map(
                 valid_restaurants,
                 center=center,
                 highlighted_id=highlighted_id,
-                map_style="기본",
                 use_clustering=True,
             )
             folium_static(m)
             st.caption(f"총 {len(valid_restaurants)}개의 식당이 지도에 표시되었습니다.")
         else:
-            st.warning("표시할 유효한 좌표 정보가 없습니다.")
+            st.warning("표시할 식당 정보가 없습니다.")
+            logger.warning("유효한 식당 정보가 없어 빈 지도 표시")
             # 빈 지도 표시 (서울 중심)
             empty_map = create_restaurant_map([], center=[37.5665, 126.9780])
             folium_static(empty_map)
     else:
         st.info("검색 결과가 지도에 표시됩니다.")
+        logger.info("식당 정보 없음, 빈 지도 표시")
         # 빈 지도 표시 (서울 중심)
         empty_map = create_restaurant_map([], center=[37.5665, 126.9780])
         folium_static(empty_map)
@@ -242,32 +436,16 @@ with left_col:
                         st.markdown(
                             f"📍 주소: {restaurant.get('address', '주소 없음')}"
                         )
-
-                        # 메뉴 정보가 있으면 표시
-                        if "menus" in restaurant and restaurant["menus"]:
-                            menu_text = ", ".join(
-                                [
-                                    menu.get("menu_name", "이름 없음")
-                                    for menu in restaurant["menus"][:3]
-                                ]
-                            )
-                            if len(restaurant["menus"]) > 3:
-                                menu_text += " 외"
-                            st.markdown(f"🍽️ 대표 메뉴: {menu_text}")
+                        st.markdown(
+                            f"🚇 지하철: {restaurant.get('subway', '정보 없음')}"
+                        )
+                        st.markdown(f"⭐ 리뷰: {restaurant.get('review', '정보 없음')}")
 
                     with col2:
                         # 지도에서 보기 버튼
-                        if st.button(
-                            "🗺️ 지도에서 보기", key=f"map_{restaurant.get('id', i)}"
-                        ):
-                            st.session_state.highlighted_restaurant = restaurant.get(
-                                "id"
-                            )
+                        if st.button("🗺️ 지도에서 보기", key=f"map_{i}"):
+                            highlight_restaurant(i)
                             st.rerun()
-
-                        # 유튜브 링크
-                        if "video_url" in restaurant and restaurant["video_url"]:
-                            st.markdown(f"[🎬 유튜브]({restaurant['video_url']})")
 
                 st.divider()
 
@@ -310,7 +488,8 @@ with right_col:
                 logger.info(f"에이전트 호출: {prompt}")
 
                 # 에이전트 실행
-                result = run_agent(prompt, st.session_state.agent_graph)
+                result = st.session_state.agent_graph.run_agent(prompt)
+                logger.info(f"에이전트 실행 결과: {result}")
                 logger.info(f"에이전트 응답 타입: {type(result)}")
 
                 # 응답 처리
@@ -318,82 +497,36 @@ with right_col:
                     response = str(result)
                     logger.warning(f"예상치 못한 응답 타입: {type(result)}")
                 else:
-                    # 메시지에서 응답 추출
-                    if "messages" in result and result["messages"]:
-                        messages = result["messages"]
-                        last_message = messages[-1]
-
-                        if hasattr(last_message, "content"):
-                            response = last_message.content
-                        else:
-                            response = str(last_message)
-
-                        logger.info(f"마지막 메시지 내용: {response[:100]}...")
-                    elif "response" in result:
+                    # 응답에서 메시지 추출
+                    if "response" in result:
                         response = result["response"]
                         logger.info(f"응답 내용: {response[:100]}...")
                     else:
-                        response = "응답을 생성하는 데 문제가 발생했습니다."
-                        logger.warning("응답 내용을 찾을 수 없음")
+                        # 메시지에서 응답 추출
+                        if "messages" in result and result["messages"]:
+                            messages = result["messages"]
+                            last_message = messages[-1]
+
+                            if hasattr(last_message, "content"):
+                                response = last_message.content
+                            else:
+                                response = str(last_message)
+
+                            logger.info(f"마지막 메시지 내용: {response[:100]}...")
+                        else:
+                            response = "응답을 생성하는 데 문제가 발생했습니다."
+                            logger.warning("응답 내용을 찾을 수 없음")
 
                 # 식당 정보 추출 및 처리
-                message_placeholder.markdown(response, unsafe_allow_html=True)
 
                 # 식당 정보 분석
-                restaurants = []
+                Answer, restaurants = parse_restaurant_info(response)
 
-                # 응답 텍스트에서 식당 정보 추출 시도
-                try:
-                    # '다음과 같은 맛집을 찾았습니다' 패턴 체크
-                    if "다음과 같은 맛집을 찾았습니다" in response:
-                        # 응답 구조 분석해서 식당 정보 추출
-                        lines = response.split("\n")
-                        restaurant_data = []
-                        current_restaurant = None
-
-                        for line in lines:
-                            line = line.strip()
-
-                            # 식당 이름 패턴 (1. **식당이름**)
-                            if (
-                                line.startswith(("1.", "2.", "3.", "4.", "5."))
-                                and "**" in line
-                            ):
-                                if current_restaurant:
-                                    restaurant_data.append(current_restaurant)
-
-                                name_start = line.find("**") + 2
-                                name_end = line.find("**", name_start)
-                                if name_end > name_start:
-                                    restaurant_name = line[name_start:name_end]
-                                    current_restaurant = {"name": restaurant_name}
-
-                            # 주소 패턴
-                            elif current_restaurant and "주소:" in line:
-                                address = line.split("주소:", 1)[1].strip()
-                                current_restaurant["address"] = address
-
-                            # 영상 URL 패턴
-                            elif current_restaurant and "영상:" in line:
-                                video_url = line.split("영상:", 1)[1].strip()
-                                current_restaurant["video_url"] = video_url
-
-                        # 마지막 식당 추가
-                        if current_restaurant:
-                            restaurant_data.append(current_restaurant)
-
-                        # 추출된 식당 정보가 있으면 restaurants에 추가
-                        if restaurant_data:
-                            restaurants = restaurant_data
-                            logger.info(
-                                f"응답에서 {len(restaurants)}개의 식당 정보를 추출했습니다."
-                            )
-
-                except Exception as e:
-                    logger.error(f"식당 정보 추출 중 오류: {str(e)}")
-
-                # 세션 상태에 식당 정보 저장
+                # message_placeholder.markdown(Answer, unsafe_allow_html=True)
+                message_placeholder.markdown(Answer)
+                # 식당 정보가 있으면 세션 상태에 저장
                 if restaurants:
+                    logger.info(f"{len(restaurants)}개의 식당 정보 추출됨")
                     st.session_state.restaurants = restaurants
 
                     # 첫 번째 식당 하이라이트
@@ -401,15 +534,13 @@ with right_col:
                         not st.session_state.get("highlighted_restaurant")
                         and restaurants
                     ):
-                        st.session_state.highlighted_restaurant = restaurants[0].get(
-                            "id"
-                        )
+                        st.session_state.highlighted_restaurant = 1
                 else:
                     logger.warning("추출된 식당 정보 없음")
 
                 # 어시스턴트 메시지 추가
                 st.session_state.messages.append(
-                    {"role": "assistant", "content": response}
+                    {"role": "assistant", "content": Answer}
                 )
 
                 # 지도 업데이트를 위한 페이지 리로드 (식당 정보가 있을 때만)
@@ -428,80 +559,11 @@ with right_col:
 query_params = st.query_params
 if "restaurant_id" in query_params:
     restaurant_id = query_params["restaurant_id"]
-    # 세션 상태에 하이라이트할 식당 ID 저장
-    st.session_state.highlighted_restaurant = restaurant_id
-    # 페이지 리로드 없이 지도 업데이트
-    st.rerun()
-
-
-def process_agent_response(response):
-    """에이전트 응답을 처리하는 함수"""
     try:
-        # 응답에서 "Answer:" 부분 추출
-        if isinstance(response, dict) and "response" in response:
-            answer_text = response["response"]
-        else:
-            answer_text = str(response)
-
-        if answer_text.startswith("Answer:"):
-            answer_text = answer_text[7:].strip()
-
-        # 식당 정보 추출
-        restaurants = response.get("restaurants", [])
-
-        # 식당 정보가 있으면 클릭 가능한 식당 이름으로 변환
-        if restaurants:
-            answer_text = add_clickable_restaurant_names(answer_text, restaurants)
-
-        return answer_text
-    except Exception as e:
-        logger.error(f"응답 처리 중 오류 발생: {str(e)}")
-        return str(response)
-
-
-def display_restaurant_detail(restaurant_id):
-    """식당 상세 정보를 표시하는 함수"""
-    try:
-        # DB에서 식당 정보 가져오기
-        from utils.db_utils import MeoktenDB
-
-        db = MeoktenDB()
-
-        # 식당 정보 가져오기
-        restaurant = db.get_restaurant_with_menus(restaurant_id)
-
-        if not restaurant:
-            st.error("식당 정보를 찾을 수 없습니다.")
-            return
-
-        # 식당 정보 표시
-        st.subheader(f"🍽️ {restaurant['name']}")
-
-        # 식당 정보와 메뉴 정보를 2개의 컬럼으로 표시
-        col1, col2 = st.columns([1, 1])
-
-        with col1:
-            st.markdown(f"**주소:** {restaurant['address']}")
-            st.markdown(f"**역:** {restaurant.get('station_name', '정보 없음')}")
-
-            # 영상 링크가 있으면 표시
-            if restaurant.get("video_url"):
-                st.markdown(
-                    f"**영상 링크:** [유튜브에서 보기]({restaurant['video_url']})"
-                )
-
-        with col2:
-            # 메뉴 정보 표시
-            if restaurant.get("menus"):
-                st.markdown("### 메뉴")
-                for menu in restaurant["menus"]:
-                    st.markdown(f"**{menu['menu_name']}** ({menu['menu_type']})")
-                    if menu.get("menu_review"):
-                        st.markdown(f"_{menu['menu_review']}_")
-                    st.markdown("---")
-            else:
-                st.markdown("메뉴 정보가 없습니다.")
-
-    except Exception as e:
-        logger.error(f"식당 상세 정보 표시 중 오류 발생: {str(e)}")
-        st.error("식당 정보를 불러오는 중 오류가 발생했습니다.")
+        # 문자열을 정수로 변환
+        restaurant_id = int(restaurant_id)
+        # 세션 상태에 하이라이트할 식당 ID 저장
+        st.session_state.highlighted_restaurant = restaurant_id
+        logger.info(f"URL 파라미터에서 식당 ID 로드: {restaurant_id}")
+    except (ValueError, TypeError) as e:
+        logger.error(f"식당 ID 파라미터 처리 오류: {str(e)}")

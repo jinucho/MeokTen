@@ -15,17 +15,6 @@ MAP_STYLES = {
     "수채화 스타일": "Stamen Watercolor",
 }
 
-# 마커 아이콘 옵션
-MARKER_ICONS = {
-    "식당": "cutlery",
-    "카페": "coffee",
-    "바": "glass",
-    "한식": "home",
-    "일식": "flag",
-    "중식": "star",
-    "양식": "cutlery",
-}
-
 
 def create_simple_popup(restaurant: dict) -> str:
     """
@@ -39,7 +28,7 @@ def create_simple_popup(restaurant: dict) -> str:
     """
     name = restaurant.get("name", "이름 없음")
     address = restaurant.get("address", "주소 없음")
-    station = restaurant.get("station_name", "")
+    station = restaurant.get("subway", "")
 
     # 메뉴 정보 (최대 2개까지만 표시)
     menu_html = ""
@@ -78,7 +67,6 @@ def create_restaurant_map(
     restaurants: List[Dict[str, Any]],
     center=None,
     highlighted_id=None,
-    map_style="기본",
     use_clustering=True,
 ):
     """식당 정보를 지도에 표시, 특정 식당 하이라이트 가능"""
@@ -86,11 +74,8 @@ def create_restaurant_map(
     if center is None:
         center = [37.5665, 126.9780]
 
-    # 지도 스타일 선택
-    tile = MAP_STYLES.get(map_style, "OpenStreetMap")
-
     # 지도 생성
-    m = folium.Map(location=center, zoom_start=13, tiles=tile)
+    m = folium.Map(location=center, zoom_start=14, tiles="cartodbpositron")
 
     # 클러스터링 설정
     if use_clustering and len(restaurants) > 1:
@@ -115,13 +100,16 @@ def create_restaurant_map(
                 )
                 categories[category].add_to(m)
 
+    # 서울 중심 좌표 (기본값)
+    base_lat, base_lng = 37.5665, 126.9780
+
     # 식당 마커 추가
-    for restaurant in restaurants:
+    for i, restaurant in enumerate(restaurants, 1):
         # 위도, 경도 확인
         try:
             # 좌표 데이터 처리 개선
-            lat = restaurant.get("latitude", None)
-            lng = restaurant.get("longitude", None)
+            lat = restaurant.get("lat", None)
+            lng = restaurant.get("lng", None)
 
             # 문자열인 경우 float로 변환
             if isinstance(lat, str) and lat not in ["정보 없음", "0", ""]:
@@ -134,19 +122,13 @@ def create_restaurant_map(
                 print(
                     f"유효하지 않은 좌표: {restaurant['name']} - lat: {lat}, lng: {lng}"
                 )
-                continue
-
-            # 카테고리 결정
-            category = "기타"
-            if restaurant.get("menus"):
-                menu_types = [
-                    menu.get("menu_type", "") for menu in restaurant.get("menus", [])
-                ]
-                if menu_types and menu_types[0]:
-                    category = menu_types[0]
+                # 기본 좌표에 오프셋 추가
+                lat = base_lat + (i * 0.001)
+                lng = base_lng + (i * 0.001)
+                print(f"기본 좌표 할당: {restaurant['name']} - lat: {lat}, lng: {lng}")
 
             # 아이콘 선택
-            icon_name = MARKER_ICONS.get(category, "cutlery")
+            icon_name = "cutlery"
 
             # 간단한 팝업 내용 생성
             popup_html = create_simple_popup(restaurant)
@@ -206,91 +188,33 @@ def create_restaurant_map(
 
         except (ValueError, TypeError) as e:
             print(f"좌표 변환 오류: {restaurant.get('name', '이름 없음')} - {e}")
-            continue
+            # 오류 발생 시 기본 좌표에 오프셋 추가
+            lat = base_lat + (i * 0.001)
+            lng = base_lng + (i * 0.001)
+            print(
+                f"오류 발생으로 기본 좌표 할당: {restaurant.get('name', '이름 없음')} - lat: {lat}, lng: {lng}"
+            )
+
+            try:
+                # 마커 생성 및 추가 시도
+                marker = folium.Marker(
+                    location=[lat, lng],
+                    popup=folium.Popup(create_simple_popup(restaurant), max_width=200),
+                    tooltip=restaurant.get("name", "이름 없음"),
+                    icon=folium.Icon(color="gray", icon="question", prefix="fa"),
+                )
+
+                # 마커 추가
+                if use_clustering and len(restaurants) > 1:
+                    marker.add_to(marker_cluster)
+                else:
+                    marker.add_to(m)
+            except Exception as e2:
+                print(f"마커 생성 오류: {restaurant.get('name', '이름 없음')} - {e2}")
+                continue
 
     # 레이어 컨트롤 추가 (클러스터링 사용 시)
     if use_clustering and len(restaurants) > 1 and categories:
         folium.LayerControl().add_to(m)
 
     return m
-
-
-def display_map_in_streamlit(restaurants: List[Dict[str, Any]], highlighted_id=None):
-    """Streamlit에 지도 표시, 특정 식당 하이라이트 가능"""
-    if not restaurants:
-        st.warning("표시할 식당 정보가 없습니다.")
-        return
-
-    # 지도 설정 옵션
-    with st.expander("🗺️ 지도 설정", expanded=False):
-        col1, col2 = st.columns(2)
-        with col1:
-            map_style = st.selectbox(
-                "지도 스타일", options=list(MAP_STYLES.keys()), index=0
-            )
-        with col2:
-            use_clustering = st.checkbox("마커 클러스터링 사용", value=True)
-
-    # 유효한 좌표가 있는 식당 필터링
-    valid_restaurants = []
-    for restaurant in restaurants:
-        lat = restaurant.get("latitude")
-        lng = restaurant.get("longitude")
-
-        # 문자열인 경우 변환 시도
-        try:
-            if isinstance(lat, str) and lat not in ["정보 없음", "0", ""]:
-                lat = float(lat)
-            if isinstance(lng, str) and lng not in ["정보 없음", "0", ""]:
-                lng = float(lng)
-
-            # 유효한 좌표인 경우만 추가
-            if lat and lng and lat != 0 and lng != 0:
-                valid_restaurants.append(restaurant)
-            else:
-                st.warning(
-                    f"'{restaurant.get('name', '이름 없음')}' 식당의 좌표 정보가 없습니다."
-                )
-        except (ValueError, TypeError):
-            st.warning(f"'{restaurant.get('name', '이름 없음')}' 식당의 좌표 변환 오류")
-            continue
-
-    # 유효한 식당이 있는 경우 지도 생성
-    if valid_restaurants:
-        # 하이라이트된 식당이 있으면 그 식당을 중심으로, 없으면 첫 번째 식당 기준
-        center = None
-        if highlighted_id:
-            for r in valid_restaurants:
-                if str(r.get("id", "")) == str(highlighted_id):
-                    try:
-                        center = [float(r.get("latitude")), float(r.get("longitude"))]
-                        break
-                    except (ValueError, TypeError):
-                        pass
-
-        if not center:
-            # 중심 좌표 계산 (첫 번째 식당 기준)
-            try:
-                center_lat = float(valid_restaurants[0].get("latitude", 37.5665))
-                center_lng = float(valid_restaurants[0].get("longitude", 126.9780))
-                center = [center_lat, center_lng]
-            except (ValueError, TypeError):
-                center = [37.5665, 126.9780]  # 기본값: 서울
-
-        # 지도 생성 및 표시
-        m = create_restaurant_map(
-            valid_restaurants,
-            center=center,
-            highlighted_id=highlighted_id,
-            map_style=map_style,
-            use_clustering=use_clustering,
-        )
-        folium_static(m)
-
-        # 지도 아래에 식당 수 표시
-        st.caption(f"총 {len(valid_restaurants)}개의 식당이 지도에 표시되었습니다.")
-    else:
-        st.warning("표시할 유효한 좌표 정보가 없습니다.")
-        # 빈 지도 표시 (서울 중심)
-        empty_map = create_restaurant_map([], center=[37.5665, 126.9780])
-        folium_static(empty_map)
