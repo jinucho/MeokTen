@@ -3,7 +3,7 @@ import sqlite3
 import requests
 
 
-db_url = "https://github.com/jinucho/Meokten/blob/main/meokten/meokten.db"
+db_url = "https://github.com/jinucho/Meokten/raw/refs/heads/main/meokten/meokten.db"
 
 response = requests.get(db_url)
 
