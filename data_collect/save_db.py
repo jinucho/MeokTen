@@ -31,48 +31,58 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 logger.propagate = False
 
+db_path = "../meokten/meokten.db"
+
 
 # 데이터베이스 초기화 함수
 def init_db():
-    conn = sqlite3.connect("meokten.db")
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # restaurants 테이블 생성
+    # restaurants 테이블이 존재하는지 확인
     cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='restaurants'"
+    )
+    if not cursor.fetchone():
+        # restaurants 테이블 생성
+        cursor.execute(
+            """
+        CREATE TABLE IF NOT EXISTS restaurants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            address TEXT NOT NULL,
+            latitude TEXT,
+            longitude TEXT,
+            station_name TEXT,
+            video_id TEXT UNIQUE,
+            video_url TEXT
+        )
         """
-    CREATE TABLE IF NOT EXISTS restaurants (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        address TEXT NOT NULL,
-        latitude TEXT,
-        longitude TEXT,
-        station_name TEXT,
-        video_id TEXT UNIQUE,
-        video_url TEXT
-    )
-    """
-    )
+        )
 
-    # 기존 테이블에 video_url 컬럼이 없으면 추가
-    try:
-        cursor.execute("SELECT video_url FROM restaurants LIMIT 1")
-    except sqlite3.OperationalError:
-        logger.info("restaurants 테이블에 video_url 컬럼 추가")
-        cursor.execute("ALTER TABLE restaurants ADD COLUMN video_url TEXT")
+        # 기존 테이블에 video_url 컬럼이 없으면 추가
+        try:
+            cursor.execute("SELECT video_url FROM restaurants LIMIT 1")
+        except sqlite3.OperationalError:
+            logger.info("restaurants 테이블에 video_url 컬럼 추가")
+            cursor.execute("ALTER TABLE restaurants ADD COLUMN video_url TEXT")
 
-    # menus 테이블 생성
-    cursor.execute(
+    # menus 테이블이 존재하는지 확인
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='menus'")
+    if not cursor.fetchone():
+        # menus 테이블 생성
+        cursor.execute(
+            """
+        CREATE TABLE IF NOT EXISTS menus (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            restaurant_id INTEGER,
+            menu_type TEXT,
+            menu_name TEXT NOT NULL,
+            menu_review TEXT,
+            FOREIGN KEY (restaurant_id) REFERENCES restaurants (id)
+        )
         """
-    CREATE TABLE IF NOT EXISTS menus (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        restaurant_id INTEGER,
-        menu_type TEXT,
-        menu_name TEXT NOT NULL,
-        menu_review TEXT,
-        FOREIGN KEY (restaurant_id) REFERENCES restaurants (id)
-    )
-    """
-    )
+        )
 
     conn.commit()
     conn.close()
@@ -98,7 +108,7 @@ def load_from_json(json_file_path):
 
 # 데이터베이스에 정보 저장 함수
 def save_to_db(video_id, restaurant_data):
-    conn = sqlite3.connect("meokten.db")
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     try:
@@ -117,10 +127,18 @@ def save_to_db(video_id, restaurant_data):
         if video_url and video_url.endswith("%"):
             video_url = video_url[:-1]
 
+        # 이미 존재하는 video_id인지 확인
+        cursor.execute("SELECT id FROM restaurants WHERE video_id = ?", (video_id,))
+        existing_restaurant = cursor.fetchone()
+
+        if existing_restaurant:
+            logger.info(f"이미 존재하는 데이터 패스: video_id {video_id}")
+            return True  # 이미 존재하는 데이터는 패스
+
         # 식당 정보 저장
         cursor.execute(
             """
-        INSERT OR REPLACE INTO restaurants (name, address, latitude, longitude, station_name, video_id, video_url)
+        INSERT INTO restaurants (name, address, latitude, longitude, station_name, video_id, video_url)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
             (
@@ -135,12 +153,7 @@ def save_to_db(video_id, restaurant_data):
         )
 
         # 방금 삽입한 식당의 ID 가져오기
-        if cursor.lastrowid:
-            restaurant_id = cursor.lastrowid
-        else:
-            # REPLACE로 기존 레코드를 업데이트한 경우 ID 조회
-            cursor.execute("SELECT id FROM restaurants WHERE video_id = ?", (video_id,))
-            restaurant_id = cursor.fetchone()[0]
+        restaurant_id = cursor.lastrowid
 
         # 기존 메뉴 삭제 (업데이트 시)
         cursor.execute("DELETE FROM menus WHERE restaurant_id = ?", (restaurant_id,))
@@ -203,7 +216,7 @@ def save_multiple_restaurants(video_id, restaurants_list):
 
 # 데이터베이스 조회 함수 (테스트용)
 def query_db():
-    conn = sqlite3.connect("meokten.db")
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row  # 결과를 딕셔너리 형태로 반환
     cursor = conn.cursor()
 

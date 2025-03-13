@@ -19,7 +19,6 @@ def get_db_connection():
         file.write(response.content)
 
     llm = LLM()
-    logger.info(f"데이터베이스 연결: {db_path}")
-    db = SQLDatabase.from_uri(db_path)
+    db = SQLDatabase.from_uri(f"sqlite:///{db_path}")
     toolkit = SQLDatabaseToolkit(db=db, llm=llm)
     return db, toolkit

@@ -56,6 +56,9 @@ logger.info("환경 변수 로드 완료")
 llm = ChatOpenAI(model_name="gpt-4o", temperature=0.1)
 logger.info("LLM 초기화 완료")
 
+with open("invalid_video.txt", "r", encoding="utf-8") as f:
+    invalid_video_ids = f.read().splitlines()
+
 
 # 쿠키 파일 생성 함수
 def create_cookie_file(cookie_data_base64):
@@ -578,6 +581,10 @@ def get_coordinates_from_address(address, headers, coordinate_url):
 for entry in tqdm(playlist_info.get("entries", []), desc="처리 중"):
     # 기본 정보만 있는 경우 (extract_flat=True)
     video_id = entry.get("id", "")
+    if video_id in invalid_video_ids:
+        logger.info(f"무효한 비디오입니다: {video_id}")
+        skipped_count += 1
+        continue
     video_title = entry.get("title", "제목 없음")
     video_url = f"https://www.youtube.com/watch?v={video_id}"
 
@@ -725,17 +732,6 @@ if cookie_file_path and os.path.exists(cookie_file_path):
     os.unlink(cookie_file_path)
     logger.info("임시 쿠키 파일 삭제 완료")
 
-# 오류 및 건너뛰기 이유 기록 파일
-error_log_file = "error_log.txt"
-with open(error_log_file, "a", encoding="utf-8") as f:
-    f.write(f"=== 작업 시작: {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-    f.write(
-        f"총 {total_videos}개 중 {processed_count}개 처리, {skipped_count}개 건너뜀, {error_count}개 오류\n"
-    )
-    f.write(
-        f"총 {len(all_restaurants)}개의 식당 정보가 {json_file_path}에 저장되었습니다.\n"
-    )
-    f.write("=== 작업 종료 ===\n\n")
 
 logger.info(
     f"작업 완료: 총 {total_videos}개 중 {processed_count}개 처리, {skipped_count}개 건너뜀, {error_count}개 오류"

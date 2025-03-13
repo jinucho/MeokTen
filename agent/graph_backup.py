@@ -2,14 +2,8 @@ import json
 import uuid
 from typing import Any, Callable, List, Literal
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, START, StateGraph
-from pydantic import ValidationError
-
-from agent.chains import answer_gen, query_check, query_gen
 from agent.config import LLM, State, get_logger
+from agent.prompt_chains import answer_gen, query_check, query_gen
 
 # 내부 모듈 import
 from agent.tools import (
@@ -18,6 +12,12 @@ from agent.tools import (
     get_schema_tool,
     list_tables_tool,
 )
+from IPython.display import Image
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.graph import MermaidDrawMethod
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
 
 # 로깅 설정 - graph.log 파일에 로그를 남김
 logger = get_logger()
@@ -89,7 +89,29 @@ class AgentGraph:
     # 쿼리 정확성 체크 함수
     def model_check_query(self, state: State) -> dict[str, list[AIMessage]]:
         """쿼리 정확성을 체크하는 함수"""
-        return {"messages": [query_check.invoke({"messages": [state["messages"][-1]]})]}
+        last_message = state["messages"][-1]
+        query_content = last_message.content
+
+        # "Answer: ```sql" 형식에서 SQL 쿼리 추출
+        if query_content.startswith("Answer:"):
+            # SQL 코드 블록에서 쿼리 추출
+            if "```sql" in query_content:
+                sql_start = query_content.find("```sql") + 6
+                sql_end = query_content.find("```", sql_start)
+                if sql_end > sql_start:
+                    query_content = query_content[sql_start:sql_end].strip()
+            # 또는 Answer: SELECT ... 형식에서 추출
+            elif "SELECT " in query_content:
+                query_content = query_content.replace("Answer:", "").strip()
+
+            logger.info(f"추출된 SQL 쿼리: {query_content[:100]}...")
+
+            # 추출된 쿼리로 AIMessage 생성
+            query_message = AIMessage(content=query_content)
+            return {"messages": [query_check.invoke({"messages": [query_message]})]}
+
+        # 일반적인 경우
+        return {"messages": [query_check.invoke({"messages": [last_message]})]}
 
     # 쿼리 생성 노드 정의
     def query_gen_node(self, state: State):
@@ -121,6 +143,7 @@ class AgentGraph:
                 # 답변이 "Answer:"로 시작하지 않으면 추가
                 if not message.content.startswith("Answer:"):
                     message.content = f"Answer: {message.content}"
+                logger.info(f"query_gen_node 응답: {message.content}")
                 return {"messages": [message]}
 
             # 일반적인 쿼리 또는 오류 메시지
@@ -145,11 +168,17 @@ class AgentGraph:
             hasattr(last_message, "name")
             and last_message.name == "db_query_tool"
             and hasattr(last_message, "content")
-            and not last_message.content.startswith("Error:")
         ):
-            return {"messages": [AIMessage(content="QUERY_EXECUTED_SUCCESSFULLY")]}
+            if not last_message.content.startswith("Error:"):
+                logger.info("쿼리 실행 성공, 결과를 생성합니다.")
+                return {"messages": [AIMessage(content="QUERY_EXECUTED_SUCCESSFULLY")]}
+            else:
+                # 오류가 발생한 경우 로그 기록
+                logger.error(f"쿼리 실행 중 오류: {last_message.content}")
+                return {"messages": [AIMessage(content=last_message.content)]}
 
         # 결과가 없거나 오류인 경우 그대로 반환
+        logger.warning(f"예상치 못한 메시지 형식: {type(last_message)}")
         return {"messages": [last_message]}
 
     # 답변 생성 노드 정의
@@ -199,7 +228,14 @@ class AgentGraph:
                 llm_response = answer_gen.invoke(
                     {"messages": answer_context["messages"]}
                 )
-                content = f"Answer: {llm_response}"
+                logger.info(f"answer_gen 응답: {llm_response}")
+                logger.info(f"answer_gen 응답 타입: {type(llm_response)}")
+
+                # 응답 타입에 따른 처리
+                content = ""
+                if isinstance(llm_response, dict):
+                    content = llm_response
+                    
             except Exception as e:
                 # LLM 호출 실패 시 기본 응답
                 content = f"Answer: 죄송합니다, 쿼리 결과를 해석하는 중 오류가 발생했습니다: {str(e)}"
@@ -224,22 +260,32 @@ class AgentGraph:
 
         # 메시지 내용이 있는 경우
         if hasattr(last_message, "content") and isinstance(last_message.content, str):
-            # 1) Terminate if the message starts with "Answer:"
-            if last_message.content.startswith("Answer:"):
+            # 1) SQL 쿼리인 경우 쿼리 검증 노드로 이동
+            if last_message.content.startswith("Answer: ```sql") or (
+                last_message.content.startswith("Answer:")
+                and "SELECT " in last_message.content
+            ):
+                logger.info("SQL 쿼리가 감지되었습니다. 쿼리 검증을 위해 이동합니다.")
+                return "correct_query"
+            # 2) 일반적인 "Answer:" 메시지는 종료
+            elif (
+                last_message.content.startswith("Answer:")
+                and "sql" not in last_message.content.lower()
+            ):
                 return END
-            # 2) 쿼리가 성공적으로 실행되었으면 답변 생성 노드로 이동
+            # 3) 쿼리가 성공적으로 실행되었으면 답변 생성 노드로 이동
             elif last_message.content == "QUERY_EXECUTED_SUCCESSFULLY":
                 return "generate_answer"
-            # 3) 오류가 있으면 쿼리 생성 노드로 돌아감
+            # 4) 오류가 있으면 쿼리 생성 노드로 돌아감
             elif last_message.content.startswith("Error:"):
                 return "query_gen"
-            # 4) 일반 텍스트 응답이 있으면 (영어로 된 답변 등) 종료
+            # 5) 일반 텍스트 응답이 있으면 (영어로 된 답변 등) 종료
             elif len(last_message.content) > 20 and not last_message.content.startswith(
                 "SELECT"
             ):
                 return END
 
-        # 5) 반복 횟수 제한을 위한 안전장치
+        # 6) 반복 횟수 제한을 위한 안전장치
         if len(state["messages"]) > 20:
             return END
 
@@ -401,7 +447,6 @@ class AgentGraph:
             dict: 에이전트 실행 결과
         """
         try:
-
             # 에이전트 실행
             logger.info(f"에이전트 실행: {query}")
             result = self.invoke_graph(
@@ -421,7 +466,116 @@ class AgentGraph:
             ):
                 messages = result["final_result"]["messages"][0].content
                 logger.info(f"에이전트 실행 결과: {messages}")
-                return messages
+
+                # SQL 쿼리인지 확인
+                if "```sql" in messages or (
+                    messages.startswith("Answer:") and "SELECT " in messages
+                ):
+                    logger.info("SQL 쿼리 감지, 쿼리를 직접 실행합니다.")
+
+                    # SQL 쿼리 추출
+                    sql_query = ""
+                    if "```sql" in messages:
+                        sql_start = messages.find("```sql") + 6
+                        sql_end = messages.find("```", sql_start)
+                        if sql_end > sql_start:
+                            sql_query = messages[sql_start:sql_end].strip()
+                    elif "SELECT " in messages:
+                        sql_start = messages.find("SELECT ")
+                        sql_query = messages[sql_start:].strip()
+
+                    if sql_query:
+                        logger.info(f"추출된 SQL 쿼리: {sql_query[:100]}...")
+                        try:
+                            # 쿼리 직접 실행
+                            query_result = db_query_tool(sql_query)
+
+                            if query_result.startswith("Error:"):
+                                logger.error(f"쿼리 실행 오류: {query_result}")
+                                return {
+                                    "answer": f"죄송합니다. 쿼리 실행 중 오류가 발생했습니다: {query_result}",
+                                    "infos": [],
+                                }
+
+                            # 쿼리 결과를 기반으로 답변 생성
+                            answer_context = {
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": f"질문: {query}\n\n쿼리 결과: {query_result}",
+                                    }
+                                ]
+                            }
+
+                            # 직접 LLM 호출 후 결과 처리
+                            llm_response = answer_gen.invoke(answer_context)
+
+                            # 응답 타입에 따른 처리
+                            if hasattr(llm_response, "content"):
+                                # AIMessage 객체인 경우
+                                logger.info(
+                                    f"AIMessage 객체에서 content 추출: {llm_response.content[:100] if llm_response.content else '내용 없음'}"
+                                )
+                                response_content = llm_response.content
+                            elif isinstance(llm_response, str):
+                                # 문자열인 경우
+                                response_content = llm_response
+                            elif isinstance(llm_response, dict):
+                                # 딕셔너리인 경우 직접 반환
+                                logger.info(
+                                    f"run_agent에서 응답이 딕셔너리 타입: {llm_response}"
+                                )
+                                return llm_response
+                            else:
+                                # 기타 타입인 경우 (딕셔너리 등)
+                                logger.info(
+                                    f"run_agent에서 예상치 못한 응답 타입: {type(llm_response)}"
+                                )
+                                return {"answer": str(llm_response), "infos": []}
+
+                            logger.info(f"생성된 답변: {response_content[:100]}...")
+
+                            # JSON 형식으로 파싱 시도
+                            try:
+                                import json
+
+                                if (
+                                    response_content.strip().startswith("{")
+                                    and '"answer"' in response_content
+                                ):
+                                    # JSON 형식의 응답인 경우
+                                    logger.info("JSON 형식 답변 반환")
+                                    return json.loads(response_content)
+                                else:
+                                    # 일반 텍스트 응답인 경우
+                                    return {"answer": response_content, "infos": []}
+                            except:
+                                # JSON 파싱 실패 시 텍스트로 반환
+                                return {"answer": response_content, "infos": []}
+                        except Exception as e:
+                            logger.error(f"쿼리 실행 또는 결과 처리 중 오류: {str(e)}")
+                            return {
+                                "answer": "죄송합니다. 쿼리 처리 중 오류가 발생했습니다.",
+                                "infos": [],
+                            }
+                    else:
+                        # SQL 쿼리 추출 실패
+                        logger.warning("SQL 쿼리 추출 실패")
+                        return {
+                            "answer": "죄송합니다. SQL 쿼리를 추출하는 데 실패했습니다.",
+                            "infos": [],
+                        }
+
+                # "Answer:" 형식의 응답인 경우
+                if messages.startswith("Answer:"):
+                    # "Answer:" 접두사 제거
+                    clean_answer = messages.replace("Answer:", "", 1).strip()
+                    logger.info(f"처리된 최종 응답: {clean_answer[:100]}...")
+                    return {"answer": clean_answer, "infos": []}
+                else:
+                    # 그 외의 경우는 원본 메시지 반환
+                    logger.info(f"처리된 최종 응답 (기본): {messages[:100]}...")
+                    return {"answer": messages, "infos": []}
 
         except Exception as e:
             logger.error(f"에이전트 실행 중 오류: {str(e)}")
