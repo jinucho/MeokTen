@@ -31,7 +31,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 logger.propagate = False
 
-db_path = "../meokten/meokten.db"
+db_path = "../meokten.db"
 
 
 # 데이터베이스 초기화 함수

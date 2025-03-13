@@ -375,7 +375,7 @@ processed_videos = []
 for key in all_restaurants.keys():
     # video_id_i 형식에서 video_id 부분만 추출
     if "_" in key:
-        video_id = key.split("_")[0]
+        video_id = key[:-2]
         if video_id not in processed_videos:
             processed_videos.append(video_id)
     else:
