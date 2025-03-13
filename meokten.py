@@ -1,19 +1,16 @@
 # app.py
-import argparse
-import ast
-import json
-import os
-from typing import Any, Dict, List
-
 import streamlit as st
 from dotenv import load_dotenv
-from streamlit_folium import folium_static
+from streamlit_folium import st_folium
 
 from agent.config import get_logger
+from agent.db import get_db_connection
 
 # 커스텀 모듈 임포트
 from agent.graph import AgentGraph
 from utils.map_utils import create_restaurant_map
+
+st.set_page_config(page_title="먹텐 - 맛집 추천 AI", page_icon="🍽️", layout="wide")
 
 
 @st.cache_resource
@@ -21,19 +18,26 @@ def create_agent_graph():
     return AgentGraph()
 
 
+@st.cache_resource
+def get_db():
+    return get_db_connection()
+
+
 # 로깅 설정 - app.log 파일에 로그 기록
 logger = get_logger()
 
-# 현재 작업 디렉토리 및 파일 확인
-current_dir = os.getcwd()
-logger.info(f"현재 작업 디렉토리: {current_dir}")
+# db 연결
+db, _ = get_db()
 
+db._execute("SELECT count(*) FROM restaurants")[0]["count(*)"]
+
+MAP_WIDTH = 800
+MAP_HEIGHT = 700
 
 # 환경 변수 로드
 load_dotenv()
 
 # 페이지 설정
-st.set_page_config(page_title="먹튼 - 맛집 추천 AI", page_icon="🍽️", layout="wide")
 
 # 그래프를 세션 상태에 저장 (최초 접속 시 1회만 생성)
 if "agent_graph" not in st.session_state:
@@ -72,20 +76,18 @@ st.markdown(
 )
 
 # 제목 및 소개
-st.title("🍽️ 먹튼 - 맛집 추천 AI")
+st.title("🍽️ 먹텐 - 맛집 추천 AI")
 st.subheader("성시경의 '먹을텐데' 맛집 추천 서비스")
 st.markdown(
     """
-    성시경이 유튜브 채널 '먹을텐데'에서 소개한 맛집을 추천해드립니다.
+    성시경이 유튜브 채널 '먹~을~텐데'에서 소개한 맛집을 추천해드립니다.
     지역, 음식 종류 등을 입력하시면 맞춤형 맛집을 추천해드립니다.
     """
 )
+st.write(f"총 {data_count}개의 맛집 데이터가 있습니다.")
 
 # 사이드바
 with st.sidebar:
-    st.title("🍽️ 먹튼")
-    st.markdown("### 맛집 추천 AI 어시스턴트")
-    st.markdown("---")
     st.markdown(
         """
         ### 사용 방법
@@ -101,8 +103,7 @@ with st.sidebar:
         """
     )
     st.markdown("---")
-    st.markdown("© 2023 먹튼")
-    st.markdown("데이터 출처: 성시경의 '먹을텐데' 유튜브 채널")
+    st.markdown("데이터 출처: 성시경의 유튜브 채널")
 
 # 메인 컨텐츠
 # 채팅 기록 초기화
@@ -252,135 +253,154 @@ left_col, right_col = st.columns([1, 1])
 
 # 왼쪽 컬럼: 지도 표시
 with left_col:
-    st.header("🗺️ 맛집 지도")
+    st.header("🗺️ 먹텐 지도")
 
-    # 지도 표시 (식당 정보가 있는 경우)
-    if "restaurants" in st.session_state and st.session_state.restaurants:
-        # 유효한 좌표가 있는 식당 필터링
-        valid_restaurants = []
-        for restaurant in st.session_state.restaurants:
-            try:
-                lat = restaurant.get("lat")
-                lng = restaurant.get("lng")
+    # 지도를 담을 고정 크기 컨테이너 생성
+    map_container = st.container(height=MAP_HEIGHT, border=False)
 
-                # 숫자형으로 변환 확인
-                if isinstance(lat, (str, float, int)) and lat not in [
-                    "정보 없음",
-                    "0",
-                    "",
-                    0,
-                ]:
-                    if isinstance(lat, str):
-                        lat = float(lat)
-                if isinstance(lng, (str, float, int)) and lng not in [
-                    "정보 없음",
-                    "0",
-                    "",
-                    0,
-                ]:
-                    if isinstance(lng, str):
-                        lng = float(lng)
+    with map_container:
+        # 지도 표시 (식당 정보가 있는 경우)
+        if "restaurants" in st.session_state and st.session_state.restaurants:
+            # 유효한 좌표가 있는 식당 필터링
+            valid_restaurants = []
+            for restaurant in st.session_state.restaurants:
+                try:
+                    lat = restaurant.get("lat")
+                    lng = restaurant.get("lng")
 
-                # 유효한 좌표인 경우만 추가 (엄격하게 검사)
-                if lat and lng and lat != 0 and lng != 0:
-                    # 좌표 정보 업데이트
-                    restaurant_with_coords = restaurant.copy()
-                    restaurant_with_coords["lat"] = lat
-                    restaurant_with_coords["lng"] = lng
-                    valid_restaurants.append(restaurant_with_coords)
-                    logger.info(
-                        f"유효한 좌표: {restaurant.get('name')} - lat={lat}, lng={lng}"
-                    )
-                else:
+                    # 숫자형으로 변환 확인
+                    if isinstance(lat, (str, float, int)) and lat not in [
+                        "정보 없음",
+                        "0",
+                        "",
+                        0,
+                    ]:
+                        if isinstance(lat, str):
+                            lat = float(lat)
+                        if isinstance(lng, (str, float, int)) and lng not in [
+                            "정보 없음",
+                            "0",
+                            "",
+                            0,
+                        ]:
+                            if isinstance(lng, str):
+                                lng = float(lng)
+
+                        # 유효한 좌표인 경우만 추가 (엄격하게 검사)
+                        if lat and lng and lat != 0 and lng != 0:
+                            # 좌표 정보 업데이트
+                            restaurant_with_coords = restaurant.copy()
+                            restaurant_with_coords["lat"] = lat
+                            restaurant_with_coords["lng"] = lng
+                            valid_restaurants.append(restaurant_with_coords)
+                            logger.info(
+                                f"유효한 좌표: {restaurant.get('name')} - lat={lat}, lng={lng}"
+                            )
+                        else:
+                            logger.warning(
+                                f"유효하지 않은 좌표: {restaurant.get('name', '이름 없음')} - lat={lat}, lng={lng}"
+                            )
+                            # 기본 좌표 할당
+                            base_lat, base_lng = 37.5665, 126.9780
+                            idx = restaurant.get("id", 1)
+                            lat = base_lat + (idx * 0.001)
+                            lng = base_lng + (idx * 0.001)
+                            restaurant_with_coords = restaurant.copy()
+                            restaurant_with_coords["lat"] = lat
+                            restaurant_with_coords["lng"] = lng
+                            valid_restaurants.append(restaurant_with_coords)
+                            logger.info(
+                                f"기본 좌표 할당: {restaurant.get('name')} - lat={lat}, lng={lng}"
+                            )
+                except (ValueError, TypeError) as e:
                     logger.warning(
-                        f"유효하지 않은 좌표: {restaurant.get('name', '이름 없음')} - lat={lat}, lng={lng}"
+                        f"좌표 변환 오류: {str(e)}, 식당: {restaurant.get('name', '이름 없음')}"
                     )
-                    # 기본 좌표 할당
+                    # 오류 발생 시 기본 좌표 할당
                     base_lat, base_lng = 37.5665, 126.9780
                     idx = restaurant.get("id", 1)
-                    lat = base_lat + (idx * 0.001)
-                    lng = base_lng + (idx * 0.001)
                     restaurant_with_coords = restaurant.copy()
-                    restaurant_with_coords["lat"] = lat
-                    restaurant_with_coords["lng"] = lng
+                    restaurant_with_coords["lat"] = base_lat + (idx * 0.001)
+                    restaurant_with_coords["lng"] = base_lng + (idx * 0.001)
                     valid_restaurants.append(restaurant_with_coords)
                     logger.info(
-                        f"기본 좌표 할당: {restaurant.get('name')} - lat={lat}, lng={lng}"
+                        f"오류 후 기본 좌표 할당: {restaurant.get('name')} - lat={base_lat + (idx * 0.001)}, lng={base_lng + (idx * 0.001)}"
                     )
-            except (ValueError, TypeError) as e:
-                logger.warning(
-                    f"좌표 변환 오류: {str(e)}, 식당: {restaurant.get('name', '이름 없음')}"
+
+            # 식당이 있는 경우 항상 지도 생성 (유효한 좌표가 없어도 기본 좌표로 표시)
+            if st.session_state.restaurants:
+                # 하이라이트된 식당 ID 가져오기
+                highlighted_id = st.session_state.get("highlighted_restaurant")
+                logger.info(f"하이라이트된 식당 ID: {highlighted_id}")
+
+                # 중심 좌표 계산
+                center = None
+                if highlighted_id:
+                    for r in valid_restaurants:
+                        if r.get("id") == highlighted_id:
+                            try:
+                                center = [
+                                    float(r.get("lat")),
+                                    float(r.get("lng")),
+                                ]
+                                logger.info(f"하이라이트된 식당 중심 좌표: {center}")
+                                break
+                            except (ValueError, TypeError):
+                                pass
+
+                if not center and valid_restaurants:
+                    try:
+                        center_lat = float(valid_restaurants[0].get("lat", 37.5665))
+                        center_lng = float(valid_restaurants[0].get("lng", 126.9780))
+                        center = [center_lat, center_lng]
+                        logger.info(f"첫 번째 식당 중심 좌표: {center}")
+                    except (ValueError, TypeError):
+                        center = [37.5665, 126.9780]  # 기본값: 서울
+                        logger.info(f"기본 중심 좌표 사용: {center}")
+                else:
+                    # center가 설정되지 않았을 경우 기본값 설정
+                    if not center:
+                        center = [37.5665, 126.9780]  # 기본값: 서울
+                        logger.info(f"기본 중심 좌표 사용: {center}")
+
+                # 지도 생성 및 표시
+                st.info(f"총 {len(valid_restaurants)}개의 식당을 지도에 표시합니다.")
+                logger.info(f"지도에 표시할 식당 수: {len(valid_restaurants)}")
+                m = create_restaurant_map(
+                    valid_restaurants,
+                    center=center,
+                    highlighted_id=highlighted_id,
+                    use_clustering=True,
+                    zoom_start=20,
                 )
-                # 오류 발생 시 기본 좌표 할당
-                base_lat, base_lng = 37.5665, 126.9780
-                idx = restaurant.get("id", 1)
-                restaurant_with_coords = restaurant.copy()
-                restaurant_with_coords["lat"] = base_lat + (idx * 0.001)
-                restaurant_with_coords["lng"] = base_lng + (idx * 0.001)
-                valid_restaurants.append(restaurant_with_coords)
-                logger.info(
-                    f"오류 후 기본 좌표 할당: {restaurant.get('name')} - lat={base_lat + (idx * 0.001)}, lng={base_lng + (idx * 0.001)}"
+                # 반환 객체를 빈 리스트로 설정하여 지도 크기 유지
+                st_folium(
+                    m, width=MAP_WIDTH, height=MAP_HEIGHT - 50, returned_objects=[]
                 )
-
-        # 식당이 있는 경우 항상 지도 생성 (유효한 좌표가 없어도 기본 좌표로 표시)
-        if st.session_state.restaurants:
-            # 하이라이트된 식당 ID 가져오기
-            highlighted_id = st.session_state.get("highlighted_restaurant")
-            logger.info(f"하이라이트된 식당 ID: {highlighted_id}")
-
-            # 중심 좌표 계산
-            center = None
-            if highlighted_id:
-                for r in valid_restaurants:
-                    if r.get("id") == highlighted_id:
-                        try:
-                            center = [
-                                float(r.get("lat")),
-                                float(r.get("lng")),
-                            ]
-                            logger.info(f"하이라이트된 식당 중심 좌표: {center}")
-                            break
-                        except (ValueError, TypeError):
-                            pass
-
-            if not center and valid_restaurants:
-                try:
-                    center_lat = float(valid_restaurants[0].get("lat", 37.5665))
-                    center_lng = float(valid_restaurants[0].get("lng", 126.9780))
-                    center = [center_lat, center_lng]
-                    logger.info(f"첫 번째 식당 중심 좌표: {center}")
-                except (ValueError, TypeError):
-                    center = [37.5665, 126.9780]  # 기본값: 서울
-                    logger.info(f"기본 중심 좌표 사용: {center}")
+                st.caption(
+                    f"총 {len(valid_restaurants)}개의 식당이 지도에 표시되었습니다."
+                )
             else:
-                # center가 설정되지 않았을 경우 기본값 설정
-                if not center:
-                    center = [37.5665, 126.9780]  # 기본값: 서울
-                    logger.info(f"기본 중심 좌표 사용: {center}")
-
-            # 지도 생성 및 표시
-            st.info(f"총 {len(valid_restaurants)}개의 식당을 지도에 표시합니다.")
-            logger.info(f"지도에 표시할 식당 수: {len(valid_restaurants)}")
-            m = create_restaurant_map(
-                valid_restaurants,
-                center=center,
-                highlighted_id=highlighted_id,
-                use_clustering=True,
-            )
-            folium_static(m)
-            st.caption(f"총 {len(valid_restaurants)}개의 식당이 지도에 표시되었습니다.")
+                st.warning("표시할 식당 정보가 없습니다.")
+                logger.warning("유효한 식당 정보가 없어 빈 지도 표시")
+                # 빈 지도 표시 (서울 중심)
+                empty_map = create_restaurant_map([], center=[37.5665, 126.9780])
+                # 반환 객체를 빈 리스트로 설정하여 지도 크기 유지
+                st_folium(
+                    empty_map,
+                    width=MAP_WIDTH,
+                    height=MAP_HEIGHT - 50,
+                    returned_objects=[],
+                )
         else:
-            st.warning("표시할 식당 정보가 없습니다.")
-            logger.warning("유효한 식당 정보가 없어 빈 지도 표시")
+            st.text("검색 결과가 지도에 표시됩니다.")
+            logger.info("식당 정보 없음, 빈 지도 표시")
             # 빈 지도 표시 (서울 중심)
             empty_map = create_restaurant_map([], center=[37.5665, 126.9780])
-            folium_static(empty_map)
-    else:
-        st.info("검색 결과가 지도에 표시됩니다.")
-        logger.info("식당 정보 없음, 빈 지도 표시")
-        # 빈 지도 표시 (서울 중심)
-        empty_map = create_restaurant_map([], center=[37.5665, 126.9780])
-        folium_static(empty_map)
+            # 반환 객체를 빈 리스트로 설정하여 지도 크기 유지
+            st_folium(
+                empty_map, width=MAP_WIDTH, height=MAP_HEIGHT - 50, returned_objects=[]
+            )
 
     # 식당 목록 표시 (접을 수 있는 섹션)
     if "restaurants" in st.session_state and st.session_state.restaurants:
@@ -410,7 +430,7 @@ with left_col:
 
 # 오른쪽 컬럼: 채팅 인터페이스
 with right_col:
-    st.header("💬 맛집 추천 챗봇")
+    st.header("💬 먹텐 챗봇")
 
     # 채팅 컨테이너 생성 (고정 높이로 스크롤 가능)
     chat_container = st.container(height=500, border=True)
@@ -422,75 +442,86 @@ with right_col:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"], unsafe_allow_html=True)
 
+        # 처리 상태 확인
+        if "processing" in st.session_state and st.session_state.processing:
+            with st.chat_message("assistant"):
+                st.write("🤔먹을 텐데~ 찾고있어요...")
+
     # 사용자 입력 (컨테이너 외부에 배치)
     prompt = st.chat_input(
         "맛집을 추천해드릴까요? (예: 서울에서 맛있는 한식 맛집 추천해줘)"
     )
 
     if prompt:
-        # 사용자 메시지 추가
+        # 처리 중인지 확인
+        if "processing" not in st.session_state:
+            st.session_state.processing = False
+
+        # 이미 처리 중이면 무시
+        if st.session_state.processing:
+            st.stop()
+
+        # 사용자 메시지 추가 및 즉시 표시
         st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.processing = True
+        st.rerun()  # 사용자 메시지 표시를 위해 즉시 리로드
 
-        # 사용자 메시지 표시 (컨테이너 내부에 추가)
-        with chat_container:
-            with st.chat_message("user"):
-                st.markdown(prompt)
+    # 응답 생성 로직 (처리 중일 때만 실행)
+    if "processing" in st.session_state and st.session_state.processing:
+        try:
+            logger.info(f"에이전트 호출: {st.session_state.messages[-1]['content']}")
 
-        # 로딩 표시
-        with chat_container:
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                message_placeholder.markdown("🤔 맛집을 찾고 있어요...")
+            # 에이전트 실행
+            result = st.session_state.agent_graph.run_agent(
+                st.session_state.messages[-1]["content"]
+            )
+            logger.info(f"에이전트 실행 결과: {result}")
+            logger.info(f"에이전트 응답 타입: {type(result)}")
 
-            # 에이전트 호출 및 응답 처리
-            try:
-                logger.info(f"에이전트 호출: {prompt}")
+            # 응답 처리
+            if isinstance(result, dict):
+                # 딕셔너리 형식의 응답 처리
+                answer, restaurants = parse_restaurant_info(result)
 
-                # 에이전트 실행
-                result = st.session_state.agent_graph.run_agent(prompt)
-                logger.info(f"에이전트 실행 결과: {result}")
-                logger.info(f"에이전트 응답 타입: {type(result)}")
-
-                # 응답 처리
-                if isinstance(result, dict):
-                    # 딕셔너리 형식의 응답 처리
-                    answer, restaurants = parse_restaurant_info(result)
-                    message_placeholder.markdown(answer)
-
-                    # 식당 정보가 있으면 세션 상태에 저장
-                    if restaurants:
-                        logger.info(f"{len(restaurants)}개의 식당 정보 추출됨")
-                        st.session_state.restaurants = restaurants
-
-                        # 첫 번째 식당 하이라이트
-                        if (
-                            not st.session_state.get("highlighted_restaurant")
-                            and restaurants
-                        ):
-                            st.session_state.highlighted_restaurant = 1
-                    else:
-                        logger.info("식당 정보가 없습니다")
-                else:
-                    answer = "식당 정보가 없거나 오류가 발생했습니다."
-                    # 문자열 형식의 응답 처리 (SQL 쿼리 결과 등)
-                    message_placeholder.markdown(answer)
-
-                # 어시스턴트 메시지 추가
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": answer}
-                )
-
-                # 지도 업데이트를 위한 페이지 리로드 (식당 정보가 있을 때만)
+                # 식당 정보가 있으면 세션 상태에 저장
                 if restaurants:
-                    st.rerun()
+                    logger.info(f"{len(restaurants)}개의 식당 정보 추출됨")
+                    st.session_state.restaurants = restaurants
 
-            except Exception as e:
-                error_msg = f"맛집 검색 중 오류가 발생했습니다: {str(e)}"
-                logger.error(f"에이전트 실행 오류: {str(e)}")
-                message_placeholder.markdown(error_msg)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": error_msg}
-                )
+                    # 첫 번째 식당 하이라이트
+                    if (
+                        not st.session_state.get("highlighted_restaurant")
+                        and restaurants
+                    ):
+                        st.session_state.highlighted_restaurant = 1
+                else:
+                    logger.info("식당 정보가 없습니다")
+            else:
+                answer = "식당 정보가 없거나 오류가 발생했습니다."
+
+            # 어시스턴트 메시지 추가
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+
+            # 처리 완료 표시
+            st.session_state.processing = False
+
+            # 지도 업데이트를 위한 페이지 리로드
+            st.rerun()
+
+        except Exception as e:
+            error_msg = f"맛집 검색 중 오류가 발생했습니다: {str(e)}"
+            logger.error(f"에이전트 실행 오류: {str(e)}")
+
+            # 어시스턴트 메시지 추가
+            st.session_state.messages.append(
+                {"role": "assistant", "content": error_msg}
+            )
+
+            # 처리 완료 표시
+            st.session_state.processing = False
+
+            # 에러 표시를 위한 페이지 리로드
+            st.rerun()
 
 # URL 파라미터 처리
 query_params = st.query_params

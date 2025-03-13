@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import Any, Callable, List, Literal
+from typing import Literal
 
 from agent.config import LLM, State, get_logger
 from agent.prompt_chains import answer_gen, query_check, query_gen
@@ -12,8 +12,7 @@ from agent.tools import (
     get_schema_tool,
     list_tables_tool,
 )
-from IPython.display import Image
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph

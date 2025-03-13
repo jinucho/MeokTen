@@ -2,8 +2,6 @@
 import folium
 from folium.plugins import MarkerCluster, FeatureGroupSubGroup
 from typing import List, Dict, Any
-import streamlit as st
-from streamlit_folium import folium_static
 import random
 
 # 지도 스타일 옵션
@@ -68,6 +66,7 @@ def create_restaurant_map(
     center=None,
     highlighted_id=None,
     use_clustering=True,
+    zoom_start=14,
 ):
     """식당 정보를 지도에 표시, 특정 식당 하이라이트 가능"""
     # 중심 좌표 설정 (기본값: 서울)
@@ -75,7 +74,7 @@ def create_restaurant_map(
         center = [37.5665, 126.9780]
 
     # 지도 생성
-    m = folium.Map(location=center, zoom_start=14, tiles="cartodbpositron")
+    m = folium.Map(location=center, zoom_start=zoom_start, tiles="cartodbpositron")
 
     # 클러스터링 설정
     if use_clustering and len(restaurants) > 1:

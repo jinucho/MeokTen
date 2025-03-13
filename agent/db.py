@@ -11,7 +11,7 @@ logger = get_logger()
 
 def get_db_connection():
     """데이터베이스 연결을 반환합니다."""
-    db_url = "https://github.com/jinucho/Meokten/raw/refs/heads/main/meokten/meokten.db"
+    db_url = "https://github.com/jinucho/Meokten/raw/refs/heads/main/meokten.db"
 
     response = requests.get(db_url)
     db_path = "meokten.db"
