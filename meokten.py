@@ -31,6 +31,7 @@ logger = get_logger()
 # db, _ = get_db()
 # db._execute("SELECT count(*) FROM restaurants")[0]["count(*)"]
 
+# 지도 크기 설정 (고정 값으로 유지)
 MAP_WIDTH = 800
 MAP_HEIGHT = 700
 
@@ -45,31 +46,119 @@ if "agent_graph" not in st.session_state:
     st.session_state.agent_graph = create_agent_graph()
     logger.info("에이전트 그래프 초기화 완료")
 
-# 자바스크립트 코드 추가 (이벤트 리스너, 자동 스크롤)
+# 자바스크립트 코드 추가 (이벤트 리스너, 자동 스크롤, 지도 크기 유지)
 st.markdown(
-    """
+    f"""
+    <style>
+    /* 지도 컨테이너 크기 유지를 위한 CSS */
+    [data-testid="stContainer"] {{
+        min-height: {MAP_HEIGHT}px !important;
+        height: {MAP_HEIGHT}px !important;
+    }}
+    /* 특정 지도 컨테이너에 적용 (좀 더 구체적인 선택자) */
+    [data-testid="column"]:first-child [data-testid="stContainer"] {{
+        min-height: {MAP_HEIGHT}px !important;
+        height: {MAP_HEIGHT}px !important;
+    }}
+    .folium-map {{
+        width: 100%;
+        height: {MAP_HEIGHT}px !important;
+        min-height: {MAP_HEIGHT}px !important;
+        z-index: 1;
+    }}
+    iframe {{
+        height: {MAP_HEIGHT}px !important;
+        min-height: {MAP_HEIGHT}px !important;
+        width: 100% !important;
+    }}
+    .stApp [data-testid="column"] {{
+        overflow: visible !important;
+    }}
+    /* 왼쪽 컬럼 지도 영역 스타일 */
+    [data-testid="column"]:first-child {{
+        min-height: {MAP_HEIGHT + 100}px !important;
+        height: auto !important;
+    }}
+    
+    /* 지도가 표시되는 영역이 충분한 공간을 가지도록 함 */
+    [data-testid="column"]:first-child [data-testid="block-container"] {{
+        height: auto !important;
+        min-height: {MAP_HEIGHT}px !important;
+        padding-bottom: 50px !important;
+    }}
+    </style>
     <script>
     // 메시지 이벤트 리스너 설정
-    window.addEventListener('message', function(e) {
-        if (e.data && e.data.type === 'highlight_restaurant') {
+    window.addEventListener('message', function(e) {{
+        if (e.data && e.data.type === 'highlight_restaurant') {{
             // URL 파라미터 설정하여 페이지 리로드
             const url = new URL(window.location.href);
             url.searchParams.set('restaurant_id', e.data.id);
             window.location.href = url.toString();
-        }
-    });
+        }}
+    }});
     
     // 자동 스크롤 함수
-    function scrollChatToBottom() {
+    function scrollChatToBottom() {{
         var chatContainer = document.querySelector('[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"]');
-        if (chatContainer) {
+        if (chatContainer) {{
             chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-    }
-    // 페이지 로드 후 스크롤
-    window.addEventListener('load', scrollChatToBottom);
+        }}
+    }}
+    
+    // 지도 크기 유지 함수
+    function maintainMapSize() {{
+        // 지도 iframe 찾기
+        const mapIframes = document.querySelectorAll('.folium-map iframe');
+        mapIframes.forEach(iframe => {{
+            iframe.style.height = '{MAP_HEIGHT}px';
+            iframe.style.minHeight = '{MAP_HEIGHT}px';
+            iframe.style.width = '100%';
+        }});
+        
+        // 지도 컨테이너 찾기 (좀 더 정확한 선택자 사용)
+        const leftColumn = document.querySelector('[data-testid="column"]:first-child');
+        if (leftColumn) {{
+            const mapContainers = leftColumn.querySelectorAll('[data-testid="stContainer"]');
+            mapContainers.forEach(container => {{
+                container.style.minHeight = '{MAP_HEIGHT}px';
+                container.style.height = '{MAP_HEIGHT}px';
+            }});
+            
+            // 왼쪽 컬럼 자체의 크기도 조정
+            leftColumn.style.minHeight = '{MAP_HEIGHT + 100}px';
+        }}
+        
+        // 전체 지도 영역 강제 리사이징
+        const mapElements = document.querySelectorAll('.folium-map');
+        mapElements.forEach(map => {{
+            map.style.height = '{MAP_HEIGHT}px';
+            map.style.minHeight = '{MAP_HEIGHT}px';
+        }});
+    }}
+    
+    // 페이지 로드 후 실행
+    window.addEventListener('load', function() {{
+        scrollChatToBottom();
+        maintainMapSize();
+        
+        // MutationObserver를 사용하여 DOM 변경 감지 및 지도 크기 유지
+        const observer = new MutationObserver(function(mutations) {{
+            maintainMapSize();
+        }});
+        
+        // body의 모든 하위 요소 변경 감시
+        observer.observe(document.body, {{ 
+            childList: true, 
+            subtree: true 
+        }});
+    }});
+    
     // 1초마다 스크롤 (새 메시지가 추가될 때)
     setInterval(scrollChatToBottom, 1000);
+    
+    // 0.5초마다 지도 크기 확인 및 조정
+    setInterval(maintainMapSize, 500);
     </script>
     """,
     unsafe_allow_html=True,
@@ -374,7 +463,11 @@ with left_col:
                 )
                 # 반환 객체를 빈 리스트로 설정하여 지도 크기 유지
                 st_folium(
-                    m, width=MAP_WIDTH, height=MAP_HEIGHT - 50, returned_objects=[]
+                    m,
+                    width="100%",
+                    height=MAP_HEIGHT,
+                    returned_objects=[],
+                    key="folium_map_main",
                 )
                 st.caption(
                     f"총 {len(valid_restaurants)}개의 식당이 지도에 표시되었습니다."
@@ -387,9 +480,10 @@ with left_col:
                 # 반환 객체를 빈 리스트로 설정하여 지도 크기 유지
                 st_folium(
                     empty_map,
-                    width=MAP_WIDTH,
-                    height=MAP_HEIGHT - 50,
+                    width="100%",
+                    height=MAP_HEIGHT,
                     returned_objects=[],
+                    key="folium_map_empty",
                 )
         else:
             st.text("검색 결과가 지도에 표시됩니다.")
@@ -398,7 +492,11 @@ with left_col:
             empty_map = create_restaurant_map([], center=[37.5665, 126.9780])
             # 반환 객체를 빈 리스트로 설정하여 지도 크기 유지
             st_folium(
-                empty_map, width=MAP_WIDTH, height=MAP_HEIGHT - 50, returned_objects=[]
+                empty_map,
+                width="100%",
+                height=MAP_HEIGHT,
+                returned_objects=[],
+                key="folium_map_initial",
             )
 
     # 식당 목록 표시 (접을 수 있는 섹션)
