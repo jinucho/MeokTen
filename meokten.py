@@ -4,7 +4,8 @@ from dotenv import load_dotenv
 from streamlit_folium import st_folium
 
 from agent.config import get_logger
-from agent.db import get_db_connection
+
+# from agent.db import get_db_connection
 
 # 커스텀 모듈 임포트
 from agent.graph import AgentGraph
@@ -26,10 +27,9 @@ def get_db():
 # 로깅 설정 - app.log 파일에 로그 기록
 logger = get_logger()
 
-# db 연결
-db, _ = get_db()
-
-db._execute("SELECT count(*) FROM restaurants")[0]["count(*)"]
+# # db 연결
+# db, _ = get_db()
+# db._execute("SELECT count(*) FROM restaurants")[0]["count(*)"]
 
 MAP_WIDTH = 800
 MAP_HEIGHT = 700
@@ -84,7 +84,7 @@ st.markdown(
     지역, 음식 종류 등을 입력하시면 맞춤형 맛집을 추천해드립니다.
     """
 )
-st.write(f"총 {data_count}개의 맛집 데이터가 있습니다.")
+# st.write(f"총 {data_count}개의 맛집 데이터가 있습니다.")
 
 # 사이드바
 with st.sidebar:
