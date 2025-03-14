@@ -587,7 +587,7 @@ with right_col:
             if isinstance(result, dict):
                 # 딕셔너리 형식의 응답 처리
                 answer, restaurants = parse_restaurant_info(result)
-                if "select" in answer.lower():
+                if "select" in answer.lower() or "error" in answer:
                     answer = "식당 정보가 없거나 오류가 발생했습니다."
                 else:
                     # 식당 정보가 있으면 세션 상태에 저장
