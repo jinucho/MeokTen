@@ -10,3 +10,4 @@ folium==0.19.3
 python-dotenv==1.0.1
 pydantic==2.9.2
 yt_dlp==2025.2.19
+requests==2.32.3
