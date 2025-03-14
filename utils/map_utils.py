@@ -30,16 +30,10 @@ def create_simple_popup(restaurant: dict) -> str:
 
     # 메뉴 정보 (최대 2개까지만 표시)
     menu_html = ""
-    if "menus" in restaurant and restaurant["menus"]:
-        menus = restaurant["menus"][:2]  # 최대 2개까지만
-        menu_names = [
-            menu.get("menu_name", "") for menu in menus if menu.get("menu_name")
-        ]
-        if menu_names:
-            menu_text = ", ".join(menu_names)
-            if len(restaurant["menus"]) > 2:
-                menu_text += " 외"
-            menu_html = f"<p><strong>대표 메뉴:</strong> {menu_text}</p>"
+    if "menu" in restaurant and restaurant["menu"]:
+        menus = restaurant["menu"]  # 최대 2개까지만
+        if menus:
+            menu_html = f"<p><strong>대표 메뉴:</strong> {menus}</p>"
 
     # 유튜브 링크
     video_html = ""

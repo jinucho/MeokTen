@@ -248,6 +248,9 @@ def parse_restaurant_info(data):
                     Answer += f"\t🚇 지하철: {info.get('subway', '정보 없음')}\n\n"
                     Answer += f"\t🍽️ 메뉴: {info.get('menu', '정보 없음')}\n\n"
                     Answer += f"\t⭐ 리뷰: {info.get('review', '정보 없음')}\n\n"
+                    Answer += (
+                        f"\t🎬 유튜브 영상: {info.get('video_url', '정보 없음')}\n\n"
+                    )
                     restaurant = {
                         "id": i,
                         "name": info.get("name", "이름 없음"),
@@ -255,6 +258,7 @@ def parse_restaurant_info(data):
                         "subway": info.get("subway", "정보 없음"),
                         "menu": info.get("menu", "정보 없음"),
                         "review": info.get("review", "정보 없음"),
+                        "video_url": info.get("video_url", "정보 없음"),
                         "lat": lat,
                         "lng": lng,
                     }
@@ -515,7 +519,11 @@ with left_col:
                         st.markdown(
                             f"🚇 지하철: {restaurant.get('subway', '정보 없음')}"
                         )
+                        st.markdown(f"🍽️ 메뉴: {restaurant.get('menu', '정보 없음')}")
                         st.markdown(f"⭐ 리뷰: {restaurant.get('review', '정보 없음')}")
+                        st.markdown(
+                            f"🎬 유튜브 영상: {restaurant.get('video_url', '정보 없음')}"
+                        )
 
                     with col2:
                         # 지도에서 보기 버튼
@@ -542,7 +550,7 @@ with right_col:
         # 처리 상태 확인
         if "processing" in st.session_state and st.session_state.processing:
             with st.chat_message("assistant"):
-                st.write("🤔먹을 텐데~ 찾고있어요...")
+                st.write("🤔먹을 텐데~\n 식당을 찾고있어요.")
 
     # 사용자 입력 (컨테이너 외부에 배치)
     prompt = st.chat_input(
