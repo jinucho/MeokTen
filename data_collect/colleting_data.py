@@ -104,8 +104,38 @@ def create_cookie_file(cookie_data_base64):
         return None
 
 
-# 플레이리스트 정보 가져오기 (타임아웃 추가)
-def get_playlist_info(playlist_url, cookie_file_path=None):
+# 플레이리스트 정보 가져오기 (쿠키 파일 사용)
+# def get_playlist_info(playlist_url, cookie_file_path=None):
+#     logger.info(f"플레이리스트 정보 가져오기 시작: {playlist_url}")
+#     ydl_opts = {
+#         "quiet": True,
+#         "no_warnings": True,
+#         "extract_flat": True,  # 기본 정보만 추출하도록 변경
+#         "nocheckcertificate": True,
+#         "ignoreerrors": True,
+#         "no_color": True,
+#         "socket_timeout": 30,  # 소켓 타임아웃 설정
+#         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+#     }
+
+#     # 쿠키 파일이 있으면 옵션에 추가
+#     if cookie_file_path:
+#         ydl_opts["cookiefile"] = cookie_file_path
+#         logger.info(f"쿠키 파일 사용")
+
+#     try:
+#         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+#             logger.info("YouTube 데이터 추출 중...")
+#             playlist_info = ydl.extract_info(playlist_url, download=False)
+#             logger.info(f"총 {len(playlist_info.get('entries', []))}개 영상")
+#             return playlist_info
+#     except Exception as e:
+#         logger.error(f"플레이리스트 정보 추출 중 오류 발생: {str(e)}")
+#         return None
+
+
+# 플레이리스트 정보 가져오기 (chrome 브라우저 쿠키 사용)
+def get_playlist_info(playlist_url, use_browser_cookies=True):
     logger.info(f"플레이리스트 정보 가져오기 시작: {playlist_url}")
     ydl_opts = {
         "quiet": True,
@@ -119,9 +149,8 @@ def get_playlist_info(playlist_url, cookie_file_path=None):
     }
 
     # 쿠키 파일이 있으면 옵션에 추가
-    if cookie_file_path:
-        ydl_opts["cookiefile"] = cookie_file_path
-        logger.info(f"쿠키 파일 사용")
+    if use_browser_cookies:
+        ydl_opts["cookiesfrombrowser"] = ("chrome",)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -134,11 +163,40 @@ def get_playlist_info(playlist_url, cookie_file_path=None):
         return None
 
 
-# 개별 비디오 정보 가져오기 (분리된 함수)
-def get_video_info(video_id, cookie_file_path=None):
+# # 개별 비디오 정보 가져오기 (쿠키 파일 사용)
+# def get_video_info(video_id, cookie_file_path=None):
+#     logger.info(f"비디오 정보 가져오기 시작: {video_id}")
+#     video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+#     ydl_opts = {
+#         "quiet": True,
+#         "no_warnings": True,
+#         "nocheckcertificate": True,
+#         "ignoreerrors": True,
+#         "no_color": True,
+#         "socket_timeout": 30,
+#         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+#     }
+
+#     if cookie_file_path:
+#         ydl_opts["cookiefile"] = cookie_file_path
+
+
+#     try:
+#         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+#             logger.info(f"비디오 정보 추출 완료...")
+#             return ydl.extract_info(video_url, download=False)
+#     except Exception as e:
+#         logger.error(f"비디오 정보 추출 중 오류 발생: {str(e)}")
+#         return None
+
+
+# 개별 비디오 정보 가져오기 (chrome 브라우저 쿠키 사용)
+def get_video_info(video_id, use_browser_cookies=True):
     logger.info(f"비디오 정보 가져오기 시작: {video_id}")
     video_url = f"https://www.youtube.com/watch?v={video_id}"
 
+    # 기본 옵션 설정
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -149,8 +207,9 @@ def get_video_info(video_id, cookie_file_path=None):
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     }
 
-    if cookie_file_path:
-        ydl_opts["cookiefile"] = cookie_file_path
+    # 브라우저 쿠키 사용 설정
+    if use_browser_cookies:
+        ydl_opts["cookiesfrombrowser"] = ("chrome",)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -601,7 +660,8 @@ for entry in tqdm(playlist_info.get("entries", []), desc="처리 중"):
     try:
         # 비디오 정보 가져오기 전에 잠시 대기 (YouTube 서버 부하 방지)
         time.sleep(1)
-        video_info = get_video_info(video_id, cookie_file_path)
+        # video_info = get_video_info(video_id, cookie_file_path)
+        video_info = get_video_info(video_id, use_browser_cookies=False)
 
         if not video_info:
             error_reason = f"비디오 정보를 가져오지 못했습니다: {video_id}"
