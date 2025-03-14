@@ -19,9 +19,9 @@ def create_agent_graph():
     return AgentGraph()
 
 
-@st.cache_resource
-def get_db():
-    return get_db_connection()
+# @st.cache_resource
+# def get_db():
+#     return get_db_connection()
 
 
 # 로깅 설정 - app.log 파일에 로그 기록
