@@ -371,7 +371,6 @@ with left_col:
                     center=center,
                     highlighted_id=highlighted_id,
                     use_clustering=True,
-                    zoom_start=20,
                 )
                 # 반환 객체를 빈 리스트로 설정하여 지도 크기 유지
                 st_folium(
