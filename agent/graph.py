@@ -346,7 +346,7 @@ class AgentGraph:
             result = self.app.invoke(
                 {"messages": [HumanMessage(content=query)]},
                 RunnableConfig(
-                    recursion_limit=10, configurable={"thread_id": self.random_uuid()}
+                    recursion_limit=30, configurable={"thread_id": self.random_uuid()}
                 ),
             )
 
