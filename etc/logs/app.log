@@ -1,0 +1,50 @@
+2025-03-21 13:27:08 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:08 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:09 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:09 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:10 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:10 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:10 - INFO - root - 실행할 쿼리: SELECT * 
+FROM restaurants 
+JOIN menus ON restaurants.id = menus.restaurant_id 
+WHERE station_name LIKE '%논현역%';
+2025-03-21 13:27:10 - INFO - root - 실행할 쿼리: SELECT * 
+FROM restaurants 
+JOIN menus ON restaurants.id = menus.restaurant_id 
+WHERE station_name LIKE '%논현역%';
+2025-03-21 13:27:10 - INFO - root - 쿼리 성공
+2025-03-21 13:27:10 - INFO - root - 쿼리 성공
+2025-03-21 13:27:10 - INFO - root - process_query_result 쿼리 실행 성공, 결과를 생성합니다.
+2025-03-21 13:27:10 - INFO - root - process_query_result 쿼리 실행 성공, 결과를 생성합니다.
+2025-03-21 13:27:18 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:18 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:54 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:27:54 - INFO - httpx - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2025-03-21 13:33:03 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:33:03 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:33:07 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:33:07 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:33:08 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:33:08 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:34:07 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:34:07 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:34:08 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:34:08 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:35:58 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:35:58 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:36:12 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:36:12 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:36:24 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:36:24 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:37:26 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:37:26 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:37:29 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:37:29 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:56:41 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:56:41 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:56:42 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:56:42 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:58:32 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:58:32 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:58:33 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage
+2025-03-21 13:58:33 - ERROR - root - run_agent 에이전트 실행 중 오류: Last message is not an AIMessage

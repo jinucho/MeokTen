@@ -93,15 +93,16 @@ class AgentGraph:
         if query_content.startswith("Answer:"):
             # SQL 코드 블록에서 쿼리 추출
             if "```sql" in query_content:
-                sql_start = query_content.find("```sql") + 6
-                sql_end = query_content.find("```", sql_start)
-                if sql_end > sql_start:
-                    query_content = query_content[sql_start:sql_end].strip()
+                query_content = (
+                    query_content.replace("```sql", "")
+                    .replace("```", "")
+                    .replace("Answer:", "")
+                    .strip()
+                )
+
             # 또는 Answer: SELECT ... 형식에서 추출
             elif "SELECT " in query_content:
                 query_content = query_content.replace("Answer:", "").strip()
-
-            # logger.info(f"model_check_query 추출된 SQL 쿼리: {query_content[:100]}...")
 
             # 추출된 쿼리로 AIMessage 생성
             query_message = AIMessage(content=query_content)
@@ -128,7 +129,6 @@ class AgentGraph:
 
             # 쿼리 생성
             message = query_gen.invoke(state)
-
             # 이미 답변 형식이면 그대로 반환
             if (
                 hasattr(message, "content")
@@ -224,15 +224,10 @@ class AgentGraph:
                         }
                     ]
                 }
-
                 # 직접 LLM 호출 후 결과 처리
                 llm_response = answer_gen.invoke(
                     {"messages": answer_context["messages"]}
                 )
-                # logger.info(f"generate_answer_node 응답: {llm_response}")
-                # logger.info(f"generate_answer_node 응답 타입: {type(llm_response)}")
-
-                # 일반적인 AIMessage 응답인 경우
                 if hasattr(llm_response, "content"):
                     content = llm_response.content
                     if isinstance(content, dict) and "answer" in content:
@@ -339,64 +334,30 @@ class AgentGraph:
             dict: 에이전트 실행 결과
         """
         try:
-            # 에이전트 직접 실행
-            # logger.info(f"run_agent 에이전트 실행: {query}")
-
-            # 직접 app.invoke 호출
+            # app 호출
             result = self.app.invoke(
                 {"messages": [HumanMessage(content=query)]},
                 RunnableConfig(
                     recursion_limit=30, configurable={"thread_id": self.random_uuid()}
                 ),
             )
-
             # 결과 처리
             if "messages" in result and result["messages"]:
                 last_message = result["messages"][-1]
-                # logger.info(f"run_agent 최종 메시지: {last_message}")
 
                 # AIMessage의 additional_kwargs에 result_data가 있는 경우 처리
                 if (
                     hasattr(last_message, "additional_kwargs")
                     and "result_data" in last_message.additional_kwargs
                 ):
-                    # logger.info(
-                    #     f"additional_kwargs에서 result_data 발견: {last_message.additional_kwargs['result_data']}"
-                    # )
                     return last_message.additional_kwargs["result_data"]
 
-                # result 키가 있는 메시지 처리 (이전 버전 호환성 유지)
-                if (
-                    hasattr(last_message, "content")
-                    and isinstance(last_message.content, dict)
-                    and "result" in last_message.content
-                ):
-                    # logger.info(f"result 키를 가진 응답 발견: {last_message.content}")
-                    return last_message.content["result"]
-
-                # 메시지가 AIMessage 객체인 경우 (일반 텍스트 응답)
-                if hasattr(last_message, "content") and isinstance(
-                    last_message.content, str
-                ):
-                    content = last_message.content
-
-                    # "Answer:" 형식의 텍스트 응답인 경우
-                    if content.startswith("Answer:"):
-                        # "Answer:" 접두사 제거
-                        clean_answer = content.replace("Answer:", "", 1).strip()
-                        # logger.info(
-                        #     f"run_agent 처리된 최종 응답: {clean_answer[:100]}..."
-                        # )
-                        return {"answer": clean_answer, "infos": []}
-                    else:
-                        # 그 외 텍스트 응답
-                        # logger.info(
-                        #     f"run_agent 처리된 최종 응답 (기본): {content[:100]}..."
-                        # )
-                        return {"answer": content, "infos": []}
-
             # 적절한 결과가 없는 경우
-            return {"answer": "응답을 처리하는 중 오류가 발생했습니다.", "infos": []}
+            else:
+                return {
+                    "answer": "응답을 처리하는 중 오류가 발생했습니다.",
+                    "infos": [],
+                }
 
         except Exception as e:
             logger.error(f"run_agent 에이전트 실행 중 오류: {str(e)}")

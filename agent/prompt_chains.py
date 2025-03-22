@@ -18,6 +18,7 @@ Double check the SQLite query for common mistakes, including:
 - Using the correct number of arguments for functions
 - Casting to the correct data type
 - Using id columns each table for joins
+- Checking that all referenced tables are joined
 
 If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query.
 
@@ -41,7 +42,7 @@ QUERY_GEN_INSTRUCTION = """당신은 세부 사항에 대한 높은 주의력을
 
 아래 메시지를 읽고 사용자의 질문, 테이블 스키마, 쿼리문, 그리고 쿼리 결과 또는 오류가 있는지 식별하세요.
 
-사용자 질문에서 지영명은 적절하게 추출해서 사용하세요.(예: 서울시 -> 서울, 경기도 -> 서울)
+사용자 질문에서 지영명은 적절하게 추출해서 사용하세요.(예: 서울시 -> 서울, 경기도 -> 경기)
 
 사용자 질문에서 지역명과 지하철역명을 구분해서 사용하세요.(논현 -> address LIKE '%논현%', 논현역 -> station_name LIKE '%논현역%')
 
@@ -49,13 +50,9 @@ menu_type은 결과에 따라 적절하게 변형해서 사용하세요.(예: �
 
 1. 질문에 대한 적절한 쿼리 결과가 존재하지 않는 경우, 사용자의 질문을 해결할 수 있는 SQL 구문적으로 올바른 SQLite 쿼리를 생성하세요. 단, 데이터베이스에 영향을 주는 DML 문(INSERT, UPDATE, DELETE, DROP 등)은 절대 사용하지 마세요.
 
-2. 새로운 쿼리를 생성할 경우, 오직 쿼리문만 반환해야 하며, 반드시 '=' 대신 LIKE 연산자를 사용해야 합니다. 또한, 'restaurants' 테이블과 'menus' 테이블을 LEFT JOIN으로 조인해야 합니다.
-    그리고 쿼리에서 모든 컬럼의 이름을 명시적으로 호출해야 합니다.
-    예를 들어:
-    "SELECT r.id AS restaurant_id, r.name AS restaurant_name, r.address, r.station_name, r.lat, r.lng, r.review, 
-    m.id AS menu_id, m.restaurant_id AS menu_restaurant_id, m.menu_name AS menu_name 
-    FROM restaurants r LEFT JOIN menus m ON r.id = m.restaurant_id 
-    WHERE r.station_name LIKE '%논현역%' or r.address LIKE '%논현동%';"
+2. 새로운 쿼리를 생성할 경우, 오직 쿼리문만 반환해야 하며, 반드시 '=' 대신 LIKE 연산자를 사용해야 합니다. 
+    반드시 restaurants와 menus 테이블을 JOIN 하고 모든 컬럼을 호출해야 합니다.
+    사용자 질의에 따라 데이터 조회 시 address 또는 station_name을 적절하게 사용해야 합니다.
 
 3. 이미 실행된 쿼리가 오류를 발생시킨 경우, 동일한 오류 메시지를 그대로 반환하세요.
     예를 들어: "Error: Pets 테이블이 존재하지 않습니다."
